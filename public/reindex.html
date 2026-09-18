@@ -24,12 +24,14 @@
 <div class="wrap">
   <div class="card">
     <h1>Notion 분할 인덱싱 v3.1</h1>
-    <div class="muted">페이지를 작은 배치로 나누어 처리하므로 Vercel 300초 제한을 피합니다.</div>
+    <div class="muted">페이지를 작은 배치로 나누어 처리합니다. 새 인덱싱 시작 후 브라우저를 닫아도 Vercel Cron이 자동으로 다음 배치를 진행합니다.</div>
     <label>REINDEX_TOKEN</label>
     <input id="token" type="password" placeholder="REINDEX_TOKEN">
     <button id="start">새 인덱싱 시작</button>
-    <button id="resume" class="secondary">이어하기</button>
+    <button id="resume" class="secondary">지금 수동 진행</button>
     <button id="status" class="secondary">상태 확인</button>
+    <button id="pause" class="secondary">자동 진행 일시정지</button>
+    <button id="autoresume" class="secondary">자동 진행 재개</button>
   </div>
 
   <div class="card">
@@ -159,6 +161,20 @@ $("status").onclick = async () => {
   try { await getStatus(); }
   catch(e) { addLog("❌ " + e.message); }
 };
+
+async function control(action) {
+  try {
+    const j = await call(`/api/reindex/control?action=${encodeURIComponent(action)}`);
+    addLog(j);
+    await getStatus();
+  } catch(e) {
+    addLog("❌ " + e.message);
+  }
+}
+
+$("pause").onclick = () => control("pause");
+$("autoresume").onclick = () => control("resume");
+
 </script>
 </body>
 </html>

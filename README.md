@@ -1,65 +1,49 @@
-# JANDI → Notion 검색 v3.1 (분할 인덱싱)
+# JANDI → Notion 검색 v3.2 (자동 Cron 분할 인덱싱)
 
-## 왜 v3.1인가
+## 핵심
 
-447페이지 환경에서 v3 단일 `/api/reindex`가 Vercel의 300초 제한에 걸리는 문제를 해결합니다.
+v3.1은 브라우저가 `/next`를 계속 호출했습니다.
 
-v3.1은 전체 문서를 작은 배치로 나누고 각 배치 결과를 Vercel Blob에 저장합니다.
+v3.2는 한 번 `새 인덱싱 시작`만 하면 이후에는 **Vercel Cron이 5분마다 자동으로 다음 배치를 처리**합니다.
 
 ```text
-/start
+새 인덱싱 시작
   ↓
-전체 페이지 목록만 수집
+447페이지 목록 저장
   ↓
-state 저장
+브라우저 종료 가능
 
-/next
+Vercel Cron
   ↓
 15페이지 처리
   ↓
-chunk-0001.json 저장
-  ↓
-state 진행률 갱신
+Blob 저장
 
-/next
+5분 후
   ↓
 다음 15페이지 처리
-  ↓
-chunk-0002.json 저장
-  ...
 
-마지막 배치
+...
   ↓
-모든 chunk 합침
+전체 완료
   ↓
-notion-index.json 최종 저장
+최종 notion-index.json 생성
 ```
-
-중간에 브라우저가 닫혀도 `이어하기`를 누르면 저장된 상태부터 계속합니다.
 
 ---
 
-## 설치
+## 배포
 
 ZIP 내용을 기존 GitHub 프로젝트에 덮어쓴 뒤 Vercel에서 Redeploy 합니다.
 
-필요 파일:
+추가 파일:
 
 ```text
-api/notion.js
-api/debug.js
-api/reindex.js
-api/reindex/start.js
-api/reindex/next.js
-api/reindex/status.js
-lib/common.js
-lib/blob.js
-lib/indexer.js
-lib/search.js
-public/reindex.html
-package.json
-vercel.json
+api/reindex/cron.js
+api/reindex/control.js
 ```
+
+기존 파일들도 v3.2 ZIP 기준으로 덮어쓰는 것을 권장합니다.
 
 ---
 
@@ -68,7 +52,9 @@ vercel.json
 ```text
 NOTION_TOKEN=...
 JANDI_TOKEN=...
+
 REINDEX_TOKEN=긴랜덤문자열
+CRON_SECRET=또다른긴랜덤문자열
 DEBUG_TOKEN=긴랜덤문자열
 
 MAX_RESULTS=5
@@ -79,145 +65,161 @@ MAX_BLOCK_DEPTH=5
 INDEX_CONCURRENCY=3
 ```
 
-### 권장값
+`CRON_SECRET`은 반드시 설정하세요.
 
-현재 약 447페이지이므로 우선:
-
-```text
-REINDEX_BATCH_SIZE=15
-INDEX_CONCURRENCY=3
-```
-
-를 권장합니다.
-
-그래도 한 배치가 300초를 넘으면:
+Vercel Cron이 `/api/reindex/cron`을 호출할 때 코드가:
 
 ```text
-REINDEX_BATCH_SIZE=10
+Authorization: Bearer <CRON_SECRET>
 ```
 
-또는:
-
-```text
-REINDEX_BATCH_SIZE=5
-```
-
-로 낮추세요.
+을 확인합니다.
 
 ---
 
-## 사용 방법
+## Cron 주기
 
-배포 후 브라우저:
+`vercel.json`:
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/reindex/cron",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+```
+
+즉 5분마다 한 번 다음 배치를 처리합니다.
+
+447페이지 / 15페이지 배치라면 약 30번 호출이 필요합니다.
+
+이론상:
+
+```text
+약 30 × 5분 = 약 150분
+```
+
+정도로 전체 인덱싱이 완료됩니다.
+
+각 배치가 실제로 오래 걸려도 브라우저는 필요 없습니다.
+
+---
+
+## 시작 방법
 
 ```text
 https://jandi-notion-search.vercel.app/reindex?token=REINDEX_TOKEN값
 ```
 
-접속합니다.
-
-화면에서:
+접속 후:
 
 ```text
 새 인덱싱 시작
 ```
 
-을 누르면 됩니다.
+을 한 번 누릅니다.
 
-브라우저가 다음 배치를 자동으로 순차 호출하며 진행률을 표시합니다.
+그 다음 브라우저를 닫아도 됩니다.
+
+---
+
+## 상태 확인
+
+언제든:
+
+```text
+/api/reindex/status?token=REINDEX_TOKEN값
+```
+
+또는 `/reindex` 화면에서 상태 확인을 누릅니다.
 
 예:
 
 ```text
-상태: running
-처리: 180/447
-진행률: 40.3%
-실패: 1
-배치: 12
+processedPages: 180
+totalPages: 447
+progress: 40.3
+status: running
 ```
-
-중간에 닫았으면 같은 URL로 다시 들어와:
-
-```text
-이어하기
-```
-
-를 누르면 됩니다.
 
 ---
 
-## API 직접 사용
+## 일시정지
 
-새 작업 시작:
-
-```text
-/api/reindex/start?token=...
-```
-
-한 배치 진행:
+웹 화면의:
 
 ```text
-/api/reindex/next?token=...
+자동 진행 일시정지
 ```
 
-상태 확인:
+또는:
 
 ```text
-/api/reindex/status?token=...
+/api/reindex/control?action=pause&token=REINDEX_TOKEN값
 ```
 
-기존 `/api/reindex`는 사용방법만 보여줍니다.
+을 호출합니다.
+
+재개:
+
+```text
+/api/reindex/control?action=resume&token=REINDEX_TOKEN값
+```
+
+---
+
+## 수동으로 즉시 한 배치 진행
+
+Cron 5분을 기다리기 싫으면:
+
+```text
+/api/reindex/next?token=REINDEX_TOKEN값
+```
+
+을 직접 호출하거나 웹 화면의:
+
+```text
+지금 수동 진행
+```
+
+을 사용합니다.
+
+---
+
+## 중복 실행 방지
+
+Cron이 이전 배치가 끝나기 전에 다시 호출될 가능성을 대비해 상태에 `lockUntil`을 저장합니다.
+
+기본적으로 한 배치 시작 시 약 4분간 lock을 잡습니다.
+
+따라서 중복 처리 가능성을 줄였습니다.
 
 ---
 
 ## 완료 후
 
-최종 Blob:
+최종 인덱스:
 
 ```text
 jandi-notion/notion-index.json
 ```
 
-이 생성됩니다.
-
-그 후 잔디:
+이 생성되고 상태는:
 
 ```text
-/노션 tcp auto buffer
+status: completed
+progress: 100
 ```
 
-검색은 Notion 전체를 다시 읽지 않고 완성된 인덱스만 조회합니다.
+이 됩니다.
 
-기존 최종 인덱스가 있는 상태에서 새 인덱싱을 시작해도,
-새 작업이 완료될 때까지 기존 인덱스를 계속 검색에 사용합니다.
-
-즉 재인덱싱 중에도 검색 서비스가 끊기지 않습니다.
-
----
-
-## 디버그
+잔디 검색은:
 
 ```text
-/api/debug?token=DEBUG_TOKEN
+/노션 검색어
 ```
 
-에서 다음을 확인합니다.
-
-- 전체 페이지
-- 현재 처리 페이지
-- 진행률
-- 실패 페이지
-- 배치 개수
-- 최종 인덱스 존재 여부
-- 최종 인덱스 페이지 수
-
----
-
-## 중요한 점
-
-`MAX_INDEX_PAGES=1000`은 전체 페이지 목록의 상한입니다.
-
-현재 447페이지라면 전체가 포함됩니다.
-
-`MAX_BLOCKS_PER_PAGE=500`, `MAX_BLOCK_DEPTH=5`는 각 문서 본문 수집 범위이며,
-검색할 때가 아니라 재인덱싱할 때만 성능 영향을 줍니다.
+그대로 사용하면 됩니다.
