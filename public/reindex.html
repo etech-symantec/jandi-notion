@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JANDI Notion Reindex</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:0;padding:32px}
+  .wrap{max-width:860px;margin:auto}
+  .card{background:#1f2937;border:1px solid #374151;border-radius:16px;padding:24px;margin-bottom:18px}
+  h1{margin-top:0}
+  button{background:#10b981;color:white;border:0;border-radius:10px;padding:12px 18px;font-weight:700;cursor:pointer;margin-right:8px}
+  button.secondary{background:#4b5563}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .bar{height:22px;background:#374151;border-radius:999px;overflow:hidden;margin:16px 0}
+  .fill{height:100%;width:0;background:#10b981;transition:width .3s}
+  pre{white-space:pre-wrap;word-break:break-word;background:#111827;padding:14px;border-radius:10px;max-height:380px;overflow:auto}
+  .big{font-size:28px;font-weight:800}
+  .muted{color:#9ca3af}
+  input{width:100%;box-sizing:border-box;background:#111827;color:#fff;border:1px solid #4b5563;border-radius:8px;padding:10px;margin:8px 0 14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Notion 분할 인덱싱 v3.1</h1>
+    <div class="muted">페이지를 작은 배치로 나누어 처리하므로 Vercel 300초 제한을 피합니다.</div>
+    <label>REINDEX_TOKEN</label>
+    <input id="token" type="password" placeholder="REINDEX_TOKEN">
+    <button id="start">새 인덱싱 시작</button>
+    <button id="resume" class="secondary">이어하기</button>
+    <button id="status" class="secondary">상태 확인</button>
+  </div>
+
+  <div class="card">
+    <div class="big" id="pct">0%</div>
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div id="summary">대기 중</div>
+  </div>
+
+  <div class="card">
+    <strong>로그</strong>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+if (qs.get("token")) $("token").value = qs.get("token");
+
+let running = false;
+
+function token() {
+  return $("token").value.trim();
+}
+
+function addLog(v) {
+  const line = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  $("log").textContent += `[${new Date().toLocaleTimeString()}] ${line}\n`;
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function render(s) {
+  const pct = Number(s.progress || 0);
+  $("pct").textContent = pct.toFixed(1) + "%";
+  $("fill").style.width = Math.min(100, pct) + "%";
+  $("summary").textContent =
+    `상태: ${s.status || s.action || "-"} | ` +
+    `처리: ${s.processedPages ?? s.pageCount ?? 0}/${s.totalPages ?? s.pageCount ?? 0} | ` +
+    `실패: ${s.failedPages ?? 0} | 배치: ${s.chunkCount ?? 0}`;
+}
+
+async function call(path) {
+  const t = token();
+  if (!t) throw new Error("REINDEX_TOKEN을 입력하세요.");
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${path}${sep}token=${encodeURIComponent(t)}`, {
+    cache: "no-store"
+  });
+  const j = await r.json();
+  if (!r.ok || j.ok === false) throw new Error(JSON.stringify(j));
+  return j;
+}
+
+async function getStatus() {
+  const s = await call("/api/reindex/status");
+  addLog(s);
+  if (s.exists) render(s);
+  return s;
+}
+
+async function runLoop() {
+  if (running) return;
+  running = true;
+  setButtons(true);
+
+  try {
+    while (true) {
+      const s = await getStatus();
+
+      if (s.status === "completed") {
+        addLog("✅ 전체 인덱싱 완료");
+        break;
+      }
+
+      const n = await call("/api/reindex/next");
+      addLog(n);
+
+      if (
+        n.action === "finalized" ||
+        n.action === "batch_and_finalized" ||
+        n.status === "completed"
+      ) {
+        render({...n, progress: 100});
+        addLog("✅ 전체 인덱싱 완료");
+        break;
+      }
+
+      render(n);
+      await new Promise(r => setTimeout(r, 800));
+    }
+  } catch (e) {
+    addLog("❌ " + e.message);
+  } finally {
+    running = false;
+    setButtons(false);
+  }
+}
+
+function setButtons(disabled) {
+  $("start").disabled = disabled;
+  $("resume").disabled = disabled;
+  $("status").disabled = disabled;
+}
+
+$("start").onclick = async () => {
+  if (!confirm("기존 진행상태를 버리고 새 인덱싱을 시작할까요?")) return;
+  $("log").textContent = "";
+  try {
+    const s = await call("/api/reindex/start");
+    addLog(s);
+    render({
+      status:"running",
+      totalPages:s.totalPages,
+      processedPages:0,
+      failedPages:0,
+      chunkCount:0,
+      progress:0
+    });
+    await runLoop();
+  } catch(e) {
+    addLog("❌ " + e.message);
+  }
+};
+
+$("resume").onclick = runLoop;
+$("status").onclick = async () => {
+  try { await getStatus(); }
+  catch(e) { addLog("❌ " + e.message); }
+};
+</script>
+</body>
+</html>

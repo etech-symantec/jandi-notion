@@ -1,6 +1,6 @@
 {
-  "name": "jandi-notion-search-v3-indexed",
-  "version": "3.0.0",
+  "name": "jandi-notion-search-v3-1-chunked",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "engines": {

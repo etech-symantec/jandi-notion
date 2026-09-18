@@ -1,17 +1,14 @@
-import { get } from "@vercel/blob";
 import {
-  INDEX_PATH,
+  FINAL_INDEX_PATH,
   clampNumber,
   escapeMarkdown,
   formatDate,
   truncate
 } from "../lib/common.js";
+import { readJsonBlob } from "../lib/blob.js";
 import { searchIndex } from "../lib/search.js";
 
-let memoryCache = {
-  loadedAt: 0,
-  index: null
-};
+let memoryCache = { loadedAt: 0, index: null };
 
 export default async function handler(req, res) {
   const started = Date.now();
@@ -19,11 +16,9 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v3 Indexed",
+      service: "JANDI Notion Search v3.1 Chunked",
       endpoint: "/api/notion",
-      reindex: "/api/reindex",
-      debug: "/api/debug",
-      usage: "JANDI에서 /노션 검색어"
+      reindexUi: "/reindex"
     });
   }
 
@@ -57,11 +52,7 @@ export default async function handler(req, res) {
     if (!index) {
       return jandi(
         res,
-        [
-          "⚠️ **검색 인덱스가 아직 없습니다.**",
-          "",
-          "관리자가 `/api/reindex`를 한 번 실행해야 합니다."
-        ].join("\n")
+        "⚠️ 검색 인덱스가 없습니다.\n관리자가 `/reindex` 페이지에서 최초 인덱싱을 실행해야 합니다."
       );
     }
 
@@ -77,7 +68,7 @@ export default async function handler(req, res) {
           `\`${escapeMarkdown(query)}\`에 대한 결과가 없습니다.`,
           "",
           `인덱스 페이지: ${index.pageCount || index.pages?.length || 0}개`,
-          `마지막 인덱싱: ${formatDate(index.createdAt) || index.createdAt || "-"}`
+          `마지막 갱신: ${formatDate(index.createdAt)}`
         ].join("\n")
       );
     }
@@ -115,8 +106,8 @@ export default async function handler(req, res) {
     }
 
     lines.push("");
-    lines.push(`인덱스: ${index.pageCount || index.pages?.length || 0}개 페이지`);
-    lines.push(`마지막 갱신: ${formatDate(index.createdAt) || index.createdAt}`);
+    lines.push(`인덱스: ${index.pageCount || index.pages?.length || 0}개`);
+    lines.push(`마지막 갱신: ${formatDate(index.createdAt)}`);
 
     return res.status(200).json({
       body: truncate(lines.join("\n"), 4500),
@@ -134,7 +125,6 @@ export default async function handler(req, res) {
 }
 
 async function loadIndex() {
-  // 같은 warm instance 내에서는 60초 메모리 캐시
   if (
     memoryCache.index &&
     Date.now() - memoryCache.loadedAt < 60_000
@@ -143,31 +133,13 @@ async function loadIndex() {
   }
 
   try {
-    const result = await get(INDEX_PATH, {
-      access: "private",
-      useCache: true
-    });
-
-    if (!result?.stream) return null;
-
-    const text = await new Response(result.stream).text();
-    const index = JSON.parse(text);
-
-    memoryCache = {
-      loadedAt: Date.now(),
-      index
-    };
-
+    const index = await readJsonBlob(FINAL_INDEX_PATH, true);
+    if (!index) return null;
+    memoryCache = { loadedAt: Date.now(), index };
     return index;
   } catch (error) {
-    const msg = String(error?.message || error);
-    if (
-      msg.includes("404") ||
-      msg.toLowerCase().includes("not found") ||
-      msg.toLowerCase().includes("does not exist")
-    ) {
-      return null;
-    }
+    const msg = String(error?.message || error).toLowerCase();
+    if (msg.includes("not found") || msg.includes("404")) return null;
     throw error;
   }
 }
