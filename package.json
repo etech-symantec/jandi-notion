@@ -1,9 +1,12 @@
 {
-  "name": "jandi-notion-search",
-  "version": "1.0.0",
+  "name": "jandi-notion-search-v3-indexed",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": "22.x"
+  },
+  "dependencies": {
+    "@vercel/blob": "2.6.1"
   }
 }

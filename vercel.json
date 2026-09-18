@@ -1,10 +1,19 @@
 {
   "functions": {
     "api/notion.js": {
-      "maxDuration": 60
+      "maxDuration": 30
+    },
+    "api/reindex.js": {
+      "maxDuration": 300
     },
     "api/debug.js": {
       "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/reindex",
+      "schedule": "0 18 * * *"
+    }
+  ]
 }

@@ -1,212 +1,257 @@
-# JANDI → Notion 검색 v2.1 Debug
+# JANDI → Notion 검색 v3 (사전 인덱싱 방식)
 
-v2의 제목+본문 검색에 **단계별 진단 로그와 `/api/debug` 자체점검 API**를 추가한 버전입니다.
+## 핵심 변경
 
-## 교체 파일
+v2는 잔디에서 검색할 때마다 Notion 페이지 본문을 읽었습니다.
 
-기존 GitHub 프로젝트에 아래 파일을 덮어쓰면 됩니다.
+v3는 구조가 다릅니다.
 
 ```text
-api/notion.js
-api/debug.js
-vercel.json
+[인덱싱]
+Notion 전체 문서
+   ↓
+/api/reindex
+   ↓
+본문 수집
+   ↓
+Vercel Blob (private)
+notion-index.json
+
+[검색]
+JANDI /노션 검색어
+   ↓
+/api/notion
+   ↓
+Vercel Blob 인덱스 로드
+   ↓
+메모리에서 검색
+   ↓
+JANDI 응답
 ```
 
-`.env.example`은 참고용입니다.
+따라서 `/노션` 검색 시 Notion API를 수백 번 호출하지 않습니다.
 
 ---
 
-# 1. 배포 후 기본 확인
+## 1. Vercel Blob 연결
+
+Vercel 프로젝트에서 Blob Store를 하나 연결하세요.
+
+권장:
 
 ```text
-https://jandi-notion-search.vercel.app/api/notion
+Storage
+→ Blob
+→ Create
+→ Private
+→ 현재 jandi-notion-search 프로젝트 연결
 ```
 
-정상이라면:
+2026년 기준 새 Blob 연결은 Vercel OIDC 인증을 사용할 수 있습니다.
+기존 방식이라면 `BLOB_READ_WRITE_TOKEN` 환경변수가 자동 생성될 수 있습니다.
+
+---
+
+## 2. 파일 교체
+
+기존 GitHub 프로젝트에 v3 ZIP의 파일을 그대로 적용합니다.
+
+중요 파일:
+
+```text
+api/notion.js
+api/reindex.js
+api/debug.js
+lib/common.js
+lib/indexer.js
+lib/search.js
+package.json
+vercel.json
+```
+
+---
+
+## 3. 환경변수
+
+기존:
+
+```text
+NOTION_TOKEN=...
+JANDI_TOKEN=...
+MAX_RESULTS=5
+```
+
+추가:
+
+```text
+REINDEX_TOKEN=임의의긴문자열
+CRON_SECRET=또다른긴문자열
+
+MAX_INDEX_PAGES=1000
+MAX_BLOCKS_PER_PAGE=500
+MAX_BLOCK_DEPTH=5
+INDEX_CONCURRENCY=3
+
+DEBUG_TOKEN=긴문자열
+```
+
+Blob 연결에 따라 Vercel이 Blob 인증값을 자동 처리합니다.
+
+---
+
+## 4. 최초 인덱싱
+
+배포 후 브라우저에서:
+
+```text
+https://jandi-notion-search.vercel.app/api/reindex?token=REINDEX_TOKEN값
+```
+
+을 엽니다.
+
+정상 예:
 
 ```json
 {
   "ok": true,
-  "service": "JANDI Notion Search v2.1 Debug"
+  "pageCount": 327,
+  "failedCount": 0,
+  "durationMs": 45231
 }
 ```
 
-가 표시됩니다.
+첫 실행은 수십 초 이상 걸릴 수 있습니다.
+
+### Vercel Logs
+
+검색:
+
+```text
+REINDEX
+```
+
+진행 예:
+
+```text
+[REINDEX][...][START]
+[REINDEX][...][PAGE_LIST_BATCH]
+[REINDEX][...][INDEX_PROGRESS] {"done":10,"total":327}
+...
+[REINDEX][...][INDEX_BUILT]
+[REINDEX][...][BLOB_SAVED]
+```
 
 ---
 
-# 2. `/api/debug` 진단
+## 5. 검색 테스트
 
-보안을 위해 Vercel 환경변수에 다음 값을 추가하는 것을 권장합니다.
+인덱싱 완료 후 JANDI:
 
 ```text
-DEBUG_TOKEN=임의의긴문자열
+/노션 tcp auto buffer
 ```
 
-그러면:
+이제 검색 시 Notion 전체를 다시 읽지 않습니다.
+
+응답에는 검색시간이 표시됩니다.
+
+예:
+
+```text
+검색시간: 120ms
+```
+
+---
+
+## 6. 자동 갱신
+
+`vercel.json`에는 다음 Cron이 포함되어 있습니다.
+
+```text
+매일 18:00 UTC
+= 한국시간 매일 03:00
+```
+
+Vercel Cron은 `/api/reindex`를 호출합니다.
+
+`CRON_SECRET` 환경변수가 설정되어 있으면 코드에서:
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+을 확인합니다.
+
+따라서 매일 새벽 Notion 검색 인덱스를 자동 갱신합니다.
+
+필요할 때는 수동으로:
+
+```text
+/api/reindex?token=REINDEX_TOKEN
+```
+
+을 실행하면 됩니다.
+
+---
+
+## 7. 진단
 
 ```text
 https://jandi-notion-search.vercel.app/api/debug?token=DEBUG_TOKEN값
 ```
 
-으로 접속합니다.
+확인 가능 항목:
 
-`DEBUG_TOKEN`을 설정하지 않으면 `/api/debug`가 공개되므로 권장하지 않습니다.
+```text
+Blob 인덱스 존재 여부
+마지막 인덱싱 시각
+인덱싱 페이지 수
+실패 페이지 수
+인덱스 JSON 크기
+샘플 페이지 제목
+환경변수 설정 여부
+```
 
-토큰 실제 값은 진단 화면에 표시하지 않습니다.
-
-## 점검 항목
-
-`/api/debug`는 실제로 아래를 테스트합니다.
-
-1. `NOTION_TOKEN`, `JANDI_TOKEN` 존재 여부
-2. Notion `/v1/search` 인증 성공 여부
-3. 검색 API가 반환하는 Page 수
-4. `MAX_SCAN_PAGES` 기준 접근 가능한 Page 스캔
-5. 샘플 Page의 block children 읽기
-6. 본문 텍스트를 실제로 읽을 수 있는지
+토큰 실제 값은 출력하지 않습니다.
 
 ---
 
-# 3. JANDI 요청 디버깅
+## 8. 현재 권장값
 
-잔디에서:
-
-```text
-/노션 proxysg
-```
-
-실행 후 Vercel:
+현재 문서가 200개를 넘으므로:
 
 ```text
-Project
-→ Logs
+MAX_INDEX_PAGES=1000
+MAX_BLOCKS_PER_PAGE=500
+MAX_BLOCK_DEPTH=5
+INDEX_CONCURRENCY=3
 ```
 
-에서 다음 문자열을 검색합니다.
+로 시작해도 됩니다.
 
-```text
-JANDI-NOTION
-```
-
-정상 요청은 대략 다음 순서로 표시됩니다.
-
-```text
-01_REQUEST_RECEIVED
-02_PAYLOAD_PARSED
-03_ENV_CHECK
-04_JANDI_TOKEN_OK
-05_QUERY_READY
-06_TITLE_SEARCH_START
-07_TITLE_SEARCH_DONE
-08_BODY_INDEX_START
-...
-09_BODY_INDEX_DONE
-10_BODY_SEARCH_DONE
-11_MERGE_DONE
-12_RESPONSE_READY
-```
-
-각 줄에 `Request ID`와 시작 후 경과 시간이 표시됩니다.
-
-예:
-
-```text
-[JANDI-NOTION][mxyz-abc123][+42ms][05_QUERY_READY] {"query":"proxysg"}
-```
-
-잔디 검색 결과 마지막에도 같은 Request ID가 표시됩니다.
-
-따라서 특정 검색의 로그만 찾으려면 Request ID로 Vercel 로그를 검색하면 됩니다.
+검색 요청 자체에는 이 설정이 성능 부담을 주지 않습니다.
+부담은 `/api/reindex` 실행 시에만 발생합니다.
 
 ---
 
-# 4. 증상별 판단
-
-## 잔디에서 실행했는데 Vercel 로그가 전혀 없음
-
-`01_REQUEST_RECEIVED`조차 없다면:
+## 9. 페이지가 1,000개보다 많아지면
 
 ```text
-JANDI → Vercel
+MAX_INDEX_PAGES=2000
 ```
 
-구간 문제입니다.
+으로 늘릴 수 있습니다.
 
-잔디 Webhook URL과 커맨드 설정을 확인합니다.
+현재 코드는 최대 5,000개까지 허용합니다.
 
-## `04_JANDI_TOKEN_OK` 이전에 종료
-
-`JANDI_TOKEN` 불일치 또는 누락입니다.
-
-## `07_TITLE_SEARCH_DONE`에서 멈춤
-
-제목 검색은 됐지만 본문 인덱스 쪽 문제입니다.
-
-## `BODY_INDEX_PAGE_DONE`이 계속 나오다가 timeout
-
-본문 스캔량이 너무 많은 것입니다.
-
-우선 아래처럼 줄여 테스트합니다.
-
-```text
-MAX_SCAN_PAGES=10
-MAX_BLOCKS_PER_PAGE=100
-MAX_BLOCK_DEPTH=1
-SEARCH_CONCURRENCY=1
-```
-
-## `NOTION_RATE_LIMIT_RETRY`
-
-Notion API 429 제한입니다.
-
-코드가 `Retry-After` 값을 보고 자동 재시도합니다.
-
-자주 발생한다면:
-
-```text
-SEARCH_CONCURRENCY=1
-```
-
-로 낮춥니다.
+단, 페이지가 매우 많아지면 Vercel Function 실행시간에 걸릴 수 있으므로
+그 시점에는 증분 인덱싱 방식으로 변경하는 것이 좋습니다.
 
 ---
 
-# 5. 권장 환경변수
+## 10. 주의
 
-```text
-NOTION_TOKEN=...
-JANDI_TOKEN=...
-DEBUG_TOKEN=아주긴임의문자열
+Notion Integration에 공유되지 않은 페이지는 인덱싱되지 않습니다.
 
-MAX_RESULTS=5
-MAX_SCAN_PAGES=50
-MAX_BLOCKS_PER_PAGE=300
-MAX_BLOCK_DEPTH=2
-SEARCH_CONCURRENCY=2
-CACHE_TTL_MINUTES=10
-```
-
-처음 안정성 확인 시에는:
-
-```text
-MAX_SCAN_PAGES=10
-MAX_BLOCKS_PER_PAGE=100
-MAX_BLOCK_DEPTH=1
-SEARCH_CONCURRENCY=1
-```
-
-로 시작하는 것을 권장합니다.
-
-정상 작동이 확인되면 문서 수에 맞게 높이세요.
-
----
-
-# 참고
-
-Vercel Serverless 환경에서 `api/notion.js`와 `api/debug.js`는 서로 다른 Function 인스턴스로 실행될 수 있습니다.
-
-따라서 `/api/debug`는 "직전 JANDI 요청의 메모리 로그"를 보여주는 방식이 아니라,
-**현재 환경에서 Notion 연결과 본문 조회가 실제 가능한지 실시간으로 자체 진단**합니다.
-
-직전 JANDI 요청의 처리 단계는 Vercel Logs에서 Request ID로 확인하는 것이 가장 정확합니다.
+새 문서를 추가한 직후 검색에 나오게 하려면 수동 `/api/reindex`를 실행하거나
+다음 자동 Cron 인덱싱까지 기다리면 됩니다.
