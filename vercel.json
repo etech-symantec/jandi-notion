@@ -18,9 +18,6 @@
     "api/reindex/status.js": {
       "maxDuration": 30
     },
-    "api/reindex/cron.js": {
-      "maxDuration": 300
-    },
     "api/reindex/control.js": {
       "maxDuration": 30
     }
@@ -29,12 +26,6 @@
     {
       "source": "/reindex",
       "destination": "/reindex.html"
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/reindex/cron",
-      "schedule": "*/5 * * * *"
     }
   ]
 }

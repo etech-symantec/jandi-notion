@@ -1,61 +1,112 @@
-# JANDI → Notion 검색 v3.2 (자동 Cron 분할 인덱싱)
+# JANDI → Notion 검색 v3.3
+## Vercel Hobby + GitHub Actions 자동 분할 인덱싱
 
-## 핵심
+Vercel Hobby 플랜의 Cron 제한을 피하기 위해 Vercel Cron을 완전히 제거했습니다.
 
-v3.1은 브라우저가 `/next`를 계속 호출했습니다.
-
-v3.2는 한 번 `새 인덱싱 시작`만 하면 이후에는 **Vercel Cron이 5분마다 자동으로 다음 배치를 처리**합니다.
+대신 GitHub Actions가 약 5분마다 현재 인덱싱 상태를 확인하고,
+`running` 상태이면 Vercel의 `/api/reindex/next`를 한 번 호출합니다.
 
 ```text
-새 인덱싱 시작
+사용자
   ↓
-447페이지 목록 저장
+/reindex → 새 인덱싱 시작
+  ↓
+447개 페이지 목록을 Blob에 저장
   ↓
 브라우저 종료 가능
 
-Vercel Cron
+GitHub Actions (약 5분마다)
   ↓
-15페이지 처리
+/api/reindex/status
   ↓
-Blob 저장
-
-5분 후
-  ↓
-다음 15페이지 처리
-
-...
-  ↓
-전체 완료
-  ↓
-최종 notion-index.json 생성
+status=running ?
+  ├─ 아니오 → 종료
+  └─ 예
+      ↓
+    /api/reindex/next
+      ↓
+    15페이지 처리
+      ↓
+    Blob chunk 저장
+      ↓
+    다음 GitHub Actions 실행에서 계속
 ```
 
 ---
 
-## 배포
+# 1. GitHub에 v3.3 업로드
 
-ZIP 내용을 기존 GitHub 프로젝트에 덮어쓴 뒤 Vercel에서 Redeploy 합니다.
-
-추가 파일:
+ZIP 내용을 현재 저장소:
 
 ```text
-api/reindex/cron.js
-api/reindex/control.js
+etech-symantec/jandi-notion
 ```
 
-기존 파일들도 v3.2 ZIP 기준으로 덮어쓰는 것을 권장합니다.
+에 그대로 덮어씁니다.
+
+특히 새로 추가된 파일:
+
+```text
+.github/workflows/notion-reindex.yml
+```
+
+이 반드시 GitHub 저장소에 올라가야 합니다.
+
+`vercel.json`에서는 Vercel Cron 설정이 제거되어 있으므로
+Hobby 플랜에서도 Cron 관련 배포 오류가 발생하지 않습니다.
 
 ---
 
-## 환경변수
+# 2. GitHub Secret 등록
+
+GitHub 저장소에서:
+
+```text
+Settings
+→ Secrets and variables
+→ Actions
+→ Repository secrets
+→ New repository secret
+```
+
+을 선택합니다.
+
+Name:
+
+```text
+REINDEX_TOKEN
+```
+
+Value:
+
+```text
+Vercel에 설정한 REINDEX_TOKEN과 완전히 동일한 값
+```
+
+을 입력합니다.
+
+중요:
+
+```text
+GitHub REINDEX_TOKEN
+=
+Vercel REINDEX_TOKEN
+```
+
+이어야 합니다.
+
+GitHub Actions 로그에는 secret 자체가 노출되지 않습니다.
+
+---
+
+# 3. Vercel 환경변수
+
+Vercel에는 기존 값만 있으면 됩니다.
 
 ```text
 NOTION_TOKEN=...
 JANDI_TOKEN=...
-
-REINDEX_TOKEN=긴랜덤문자열
-CRON_SECRET=또다른긴랜덤문자열
-DEBUG_TOKEN=긴랜덤문자열
+REINDEX_TOKEN=...
 
 MAX_RESULTS=5
 MAX_INDEX_PAGES=1000
@@ -63,58 +114,85 @@ REINDEX_BATCH_SIZE=15
 MAX_BLOCKS_PER_PAGE=500
 MAX_BLOCK_DEPTH=5
 INDEX_CONCURRENCY=3
+
+DEBUG_TOKEN=...
 ```
 
-`CRON_SECRET`은 반드시 설정하세요.
-
-Vercel Cron이 `/api/reindex/cron`을 호출할 때 코드가:
+v3.3에서는 더 이상:
 
 ```text
-Authorization: Bearer <CRON_SECRET>
+CRON_SECRET
 ```
 
-을 확인합니다.
+이 필요하지 않습니다.
+
+남아 있어도 동작에는 영향이 없지만 삭제해도 됩니다.
 
 ---
 
-## Cron 주기
+# 4. Vercel 재배포
 
-`vercel.json`:
-
-```json
-{
-  "crons": [
-    {
-      "path": "/api/reindex/cron",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
-```
-
-즉 5분마다 한 번 다음 배치를 처리합니다.
-
-447페이지 / 15페이지 배치라면 약 30번 호출이 필요합니다.
-
-이론상:
+GitHub에 v3.3을 commit/push한 뒤 Vercel에서 자동 배포되거나,
+수동 Create Deployment에서:
 
 ```text
-약 30 × 5분 = 약 150분
+main
 ```
 
-정도로 전체 인덱싱이 완료됩니다.
+을 입력하여 Production으로 배포합니다.
 
-각 배치가 실제로 오래 걸려도 브라우저는 필요 없습니다.
+v3.3의 `vercel.json`에는 5분 Cron이 없으므로 Hobby 플랜에서
+다음 오류가 발생하지 않아야 합니다.
+
+```text
+Hobby accounts are limited to daily cron jobs
+```
 
 ---
 
-## 시작 방법
+# 5. GitHub Actions 확인
+
+GitHub 저장소:
+
+```text
+Actions
+→ Notion Reindex Worker
+```
+
+가 보여야 합니다.
+
+처음에는 오른쪽 또는 상단의:
+
+```text
+Run workflow
+```
+
+버튼으로 수동 실행해보는 것을 권장합니다.
+
+정상 로그:
+
+```text
+Check reindex status
+Current state: status=running, progress=6.7%, processed=30/447
+
+Process next batch
+Action: batch_completed
+Progress: 10.1% (45/447)
+```
+
+처럼 보입니다.
+
+---
+
+# 6. 인덱싱 시작
+
+Vercel:
 
 ```text
 https://jandi-notion-search.vercel.app/reindex?token=REINDEX_TOKEN값
 ```
 
-접속 후:
+에서:
 
 ```text
 새 인덱싱 시작
@@ -122,46 +200,69 @@ https://jandi-notion-search.vercel.app/reindex?token=REINDEX_TOKEN값
 
 을 한 번 누릅니다.
 
-그 다음 브라우저를 닫아도 됩니다.
+이 단계에서 전체 Notion 페이지 목록만 수집하고 상태를 `running`으로 저장합니다.
+
+그 후 브라우저를 닫아도 됩니다.
 
 ---
 
-## 상태 확인
+# 7. 자동 진행
+
+GitHub Actions workflow에는:
+
+```yaml
+schedule:
+  - cron: "*/5 * * * *"
+```
+
+가 들어 있습니다.
+
+GitHub scheduled workflow는 UTC 기준으로 동작하며,
+5분마다 실행되도록 요청합니다.
+
+단, GitHub Actions scheduled workflow는 정확히 5분마다 실행된다는 보장은 없고
+GitHub 부하에 따라 몇 분 이상 지연될 수 있습니다.
+
+이 기능은 검색 정확도에는 영향을 주지 않고,
+전체 인덱싱 완료 시간이 조금 늘어날 수 있다는 의미입니다.
+
+---
+
+# 8. 진행 상태 확인
 
 언제든:
 
 ```text
-/api/reindex/status?token=REINDEX_TOKEN값
+https://jandi-notion-search.vercel.app/api/reindex/status?token=REINDEX_TOKEN값
 ```
 
 또는 `/reindex` 화면에서 상태 확인을 누릅니다.
 
 예:
 
-```text
-processedPages: 180
-totalPages: 447
-progress: 40.3
-status: running
+```json
+{
+  "status": "running",
+  "totalPages": 447,
+  "processedPages": 180,
+  "failedPages": 2,
+  "progress": 40.3
+}
 ```
 
 ---
 
-## 일시정지
+# 9. 자동 진행 일시정지
 
-웹 화면의:
+기존 v3.2/v3.1의 control API는 그대로 사용할 수 있습니다.
 
-```text
-자동 진행 일시정지
-```
-
-또는:
+중지:
 
 ```text
 /api/reindex/control?action=pause&token=REINDEX_TOKEN값
 ```
 
-을 호출합니다.
+GitHub Actions는 `status=paused`이면 `/next`를 호출하지 않습니다.
 
 재개:
 
@@ -171,55 +272,73 @@ status: running
 
 ---
 
-## 수동으로 즉시 한 배치 진행
+# 10. 즉시 한 배치 진행
 
-Cron 5분을 기다리기 싫으면:
+5분을 기다리지 않고 바로 진행하려면:
 
 ```text
 /api/reindex/next?token=REINDEX_TOKEN값
 ```
 
-을 직접 호출하거나 웹 화면의:
+또는 GitHub:
 
 ```text
-지금 수동 진행
+Actions
+→ Notion Reindex Worker
+→ Run workflow
 ```
 
-을 사용합니다.
+를 실행할 수 있습니다.
 
 ---
 
-## 중복 실행 방지
+# 11. 전체 완료
 
-Cron이 이전 배치가 끝나기 전에 다시 호출될 가능성을 대비해 상태에 `lockUntil`을 저장합니다.
-
-기본적으로 한 배치 시작 시 약 4분간 lock을 잡습니다.
-
-따라서 중복 처리 가능성을 줄였습니다.
-
----
-
-## 완료 후
-
-최종 인덱스:
+마지막 배치에서 자동으로 모든 chunk를 합쳐:
 
 ```text
 jandi-notion/notion-index.json
 ```
 
-이 생성되고 상태는:
+을 생성합니다.
+
+상태:
 
 ```text
 status: completed
 progress: 100
 ```
 
-이 됩니다.
+이 되면 이후 GitHub Actions는 상태만 확인하고 아무 작업도 하지 않습니다.
 
-잔디 검색은:
+잔디 검색:
 
 ```text
-/노션 검색어
+/노션 tcp auto buffer
 ```
 
-그대로 사용하면 됩니다.
+는 최종 인덱스에서 즉시 검색합니다.
+
+---
+
+# 12. 현재 447페이지 기준 예상
+
+기본:
+
+```text
+REINDEX_BATCH_SIZE=15
+```
+
+이면 약:
+
+```text
+447 / 15 ≈ 30회
+```
+
+의 배치가 필요합니다.
+
+GitHub Actions가 평균 5분 간격이라면 이론적으로 약 2시간 30분이지만,
+scheduled workflow 지연을 고려하면 더 걸릴 수 있습니다.
+
+빨리 끝내고 싶다면 GitHub Actions의 `Run workflow`를 중간중간 수동 실행하거나,
+`/api/reindex/next`를 직접 호출하면 됩니다.
