@@ -1,27 +1,30 @@
 const NOTION_API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2026-03-11";
 
-// Vercel warm instance에서만 유지되는 간단한 메모리 캐시.
-// 인스턴스가 교체되면 자동 초기화되며, 영구 저장소가 필요하지 않습니다.
 let bodyIndexCache = {
   createdAt: 0,
   pages: []
 };
 
 export default async function handler(req, res) {
-  console.log("=== JANDI REQUEST START ===");
-  console.log("method:", req.method);
-  console.log("body:", JSON.stringify(req.body));
+  const requestId = makeRequestId();
+  const startedAt = Date.now();
+  const stage = makeStageLogger(requestId);
+
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v2",
+      service: "JANDI Notion Search v2.1 Debug",
       endpoint: "/api/notion",
+      debug: "/api/debug",
+      requestId,
       features: [
-        "Notion 제목 검색",
-        "Notion 페이지 본문 검색",
-        "관련도 정렬",
-        "warm-instance 메모리 캐시"
+        "제목 검색",
+        "본문 검색",
+        "단계별 Vercel 로그",
+        "처리시간 측정",
+        "본문 인덱스 캐시",
+        "Notion API 429 재시도"
       ],
       usage: "JANDI에서 /노션 검색어"
     });
@@ -33,38 +36,73 @@ export default async function handler(req, res) {
   }
 
   try {
+    stage("01_REQUEST_RECEIVED", {
+      method: req.method,
+      contentType: req.headers["content-type"] || "",
+      hasBody: !!req.body
+    });
+
     const payload =
       typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+
+    stage("02_PAYLOAD_PARSED", {
+      keyword: payload.keyword || "",
+      dataLength: String(payload.data || "").length,
+      hasToken: !!payload.token,
+      writerName: payload.writerName || ""
+    });
 
     const expectedJandiToken = process.env.JANDI_TOKEN;
     const notionToken = process.env.NOTION_TOKEN;
 
+    stage("03_ENV_CHECK", {
+      JANDI_TOKEN: maskPresence(expectedJandiToken),
+      NOTION_TOKEN: maskPresence(notionToken),
+      MAX_RESULTS: process.env.MAX_RESULTS || "5(default)",
+      MAX_SCAN_PAGES: process.env.MAX_SCAN_PAGES || "50(default)",
+      MAX_BLOCKS_PER_PAGE: process.env.MAX_BLOCKS_PER_PAGE || "300(default)",
+      MAX_BLOCK_DEPTH: process.env.MAX_BLOCK_DEPTH || "2(default)",
+      SEARCH_CONCURRENCY: process.env.SEARCH_CONCURRENCY || "2(default)",
+      CACHE_TTL_MINUTES: process.env.CACHE_TTL_MINUTES || "10(default)"
+    });
+
     if (!expectedJandiToken) {
-      console.error("JANDI_TOKEN 환경변수가 없습니다.");
+      stage("ERROR_JANDI_TOKEN_MISSING");
       return jandiResponse(
         res,
-        "⚠️ 서버 설정 오류: JANDI_TOKEN이 등록되지 않았습니다."
+        "⚠️ 서버 설정 오류: JANDI_TOKEN이 등록되지 않았습니다.",
+        requestId,
+        startedAt
       );
     }
 
     if (!payload.token || payload.token !== expectedJandiToken) {
+      stage("ERROR_JANDI_TOKEN_MISMATCH");
       return jandiResponse(
         res,
-        "⛔ 인증되지 않은 잔디 Webhook 요청입니다."
+        `⛔ 인증되지 않은 잔디 Webhook 요청입니다.\nRequest ID: \`${requestId}\``,
+        requestId,
+        startedAt
       );
     }
 
+    stage("04_JANDI_TOKEN_OK");
+
     if (!notionToken) {
-      console.error("NOTION_TOKEN 환경변수가 없습니다.");
+      stage("ERROR_NOTION_TOKEN_MISSING");
       return jandiResponse(
         res,
-        "⚠️ 서버 설정 오류: NOTION_TOKEN이 등록되지 않았습니다."
+        "⚠️ 서버 설정 오류: NOTION_TOKEN이 등록되지 않았습니다.",
+        requestId,
+        startedAt
       );
     }
 
     const query = String(payload.data || "")
       .replace(/\s+/g, " ")
       .trim();
+
+    stage("05_QUERY_READY", { query });
 
     if (!query) {
       return jandiResponse(
@@ -74,24 +112,52 @@ export default async function handler(req, res) {
           "",
           "검색어를 입력해주세요.",
           "예: `/노션 tcp auto buffer`",
-          "예: `/노션 cyberark duo`"
-        ].join("\n")
+          "",
+          `Request ID: \`${requestId}\``
+        ].join("\n"),
+        requestId,
+        startedAt
       );
     }
 
     const maxResults = clampNumber(process.env.MAX_RESULTS, 1, 10, 5);
 
-    // 1) Notion 공식 Search API: 제목/검색 인덱스 기반 검색
-    const titleResults = await searchNotionByTitle(notionToken, query);
+    const titleStarted = Date.now();
+    stage("06_TITLE_SEARCH_START");
 
-    // 2) 접근 가능한 페이지의 본문을 읽어 검색
-    //    캐시가 유효하면 Notion 전체 본문을 매번 다시 읽지 않습니다.
-    const index = await getOrBuildBodyIndex(notionToken);
+    const titleResults = await searchNotionByTitle(notionToken, query, stage);
+
+    stage("07_TITLE_SEARCH_DONE", {
+      count: titleResults.length,
+      ms: Date.now() - titleStarted
+    });
+
+    const bodyStarted = Date.now();
+    stage("08_BODY_INDEX_START");
+
+    const index = await getOrBuildBodyIndex(notionToken, stage);
+
+    stage("09_BODY_INDEX_DONE", {
+      pages: index.pages.length,
+      cached: index.cached,
+      ms: Date.now() - bodyStarted
+    });
+
+    const bodySearchStarted = Date.now();
     const bodyResults = searchBodyIndex(index.pages, query);
 
-    // 3) 같은 페이지를 합치고 관련도 순으로 정렬
-    const merged = mergeResults(titleResults, bodyResults, query)
+    stage("10_BODY_SEARCH_DONE", {
+      count: bodyResults.length,
+      ms: Date.now() - bodySearchStarted
+    });
+
+    const merged = mergeResults(titleResults, bodyResults)
       .slice(0, maxResults);
+
+    stage("11_MERGE_DONE", {
+      finalCount: merged.length,
+      totalMs: Date.now() - startedAt
+    });
 
     if (merged.length === 0) {
       return jandiResponse(
@@ -101,10 +167,16 @@ export default async function handler(req, res) {
           "",
           `\`${escapeMarkdown(query)}\`에 대한 결과가 없습니다.`,
           "",
-          `본문 검색 대상 페이지: ${index.pages.length}개`,
+          `제목 검색 결과: ${titleResults.length}건`,
+          `본문 검색 대상: ${index.pages.length}개 페이지`,
+          `본문 일치: ${bodyResults.length}건`,
+          `캐시 사용: ${index.cached ? "예" : "아니오"}`,
+          `처리시간: ${formatMs(Date.now() - startedAt)}`,
           "",
-          "검색 대상 페이지가 Notion Integration에 공유되어 있는지 확인해주세요."
-        ].join("\n")
+          `Request ID: \`${requestId}\``
+        ].join("\n"),
+        requestId,
+        startedAt
       );
     }
 
@@ -114,6 +186,8 @@ export default async function handler(req, res) {
       `검색어: **${escapeMarkdown(query)}**`,
       `결과: ${merged.length}건`,
       `본문 검색 대상: ${index.pages.length}개 페이지`,
+      `캐시: ${index.cached ? "사용" : "새로 생성"}`,
+      `처리시간: ${formatMs(Date.now() - startedAt)}`,
       ""
     ];
 
@@ -131,9 +205,7 @@ export default async function handler(req, res) {
       );
 
       let description = "";
-      if (item.snippet) {
-        description += `${truncate(item.snippet, 350)}\n`;
-      }
+      if (item.snippet) description += `${truncate(item.snippet, 350)}\n`;
       if (item.lastEdited) {
         description += `최근 수정: ${formatDate(item.lastEdited)}\n`;
       }
@@ -145,6 +217,14 @@ export default async function handler(req, res) {
       });
     }
 
+    bodyLines.push("");
+    bodyLines.push(`Request ID: \`${requestId}\``);
+
+    stage("12_RESPONSE_READY", {
+      responseBodyLength: bodyLines.join("\n").length,
+      totalMs: Date.now() - startedAt
+    });
+
     return res.status(200).json({
       body: truncate(bodyLines.join("\n"), 4500),
       connectColor: "#000000",
@@ -152,18 +232,33 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error("Unhandled error:", error);
+    stage("99_UNHANDLED_ERROR", {
+      name: error?.name || "",
+      message: error?.message || String(error),
+      stack: String(error?.stack || "").slice(0, 1200),
+      totalMs: Date.now() - startedAt
+    });
 
     if (String(error?.message || "").includes("NOTION_RATE_LIMIT")) {
       return jandiResponse(
         res,
-        "⚠️ Notion API 요청이 많아 잠시 제한되었습니다. 몇 초 후 다시 검색해주세요."
+        `⚠️ Notion API 요청이 많아 잠시 제한되었습니다.\n몇 초 후 다시 검색해주세요.\n\nRequest ID: \`${requestId}\``,
+        requestId,
+        startedAt
       );
     }
 
     return jandiResponse(
       res,
-      "⚠️ 검색 처리 중 오류가 발생했습니다. Vercel Function 로그를 확인해주세요."
+      [
+        "⚠️ 검색 처리 중 오류가 발생했습니다.",
+        "Vercel Logs에서 아래 Request ID를 검색해주세요.",
+        "",
+        `Request ID: \`${requestId}\``,
+        `처리시간: ${formatMs(Date.now() - startedAt)}`
+      ].join("\n"),
+      requestId,
+      startedAt
     );
   }
 }
@@ -173,7 +268,7 @@ export default async function handler(req, res) {
 // 제목 검색
 // -----------------------------------------------------------------------------
 
-async function searchNotionByTitle(token, query) {
+async function searchNotionByTitle(token, query, stage) {
   const response = await notionFetch(token, "/search", {
     method: "POST",
     body: {
@@ -183,7 +278,9 @@ async function searchNotionByTitle(token, query) {
         direction: "descending",
         timestamp: "last_edited_time"
       }
-    }
+    },
+    stage,
+    label: "TITLE_SEARCH"
   });
 
   const items = Array.isArray(response.results) ? response.results : [];
@@ -204,10 +301,10 @@ async function searchNotionByTitle(token, query) {
 
 
 // -----------------------------------------------------------------------------
-// 본문 인덱스 생성/캐시
+// 본문 인덱스
 // -----------------------------------------------------------------------------
 
-async function getOrBuildBodyIndex(token) {
+async function getOrBuildBodyIndex(token, stage) {
   const ttlMinutes = clampNumber(process.env.CACHE_TTL_MINUTES, 1, 1440, 10);
   const ttlMs = ttlMinutes * 60 * 1000;
   const now = Date.now();
@@ -216,17 +313,44 @@ async function getOrBuildBodyIndex(token) {
     bodyIndexCache.pages.length > 0 &&
     now - bodyIndexCache.createdAt < ttlMs
   ) {
+    stage("BODY_INDEX_CACHE_HIT", {
+      pages: bodyIndexCache.pages.length,
+      ageSeconds: Math.round((now - bodyIndexCache.createdAt) / 1000)
+    });
+
     return {
       pages: bodyIndexCache.pages,
       cached: true
     };
   }
 
-  const pages = await listAccessiblePages(token);
+  stage("BODY_INDEX_CACHE_MISS");
+
+  const pages = await listAccessiblePages(token, stage);
   const concurrency = clampNumber(process.env.SEARCH_CONCURRENCY, 1, 3, 2);
+
+  stage("BODY_INDEX_PAGE_LIST_DONE", {
+    pages: pages.length,
+    concurrency
+  });
+
+  let done = 0;
+  let failed = 0;
+
   const indexed = await mapLimit(pages, concurrency, async page => {
+    const pageStarted = Date.now();
+
     try {
-      const bodyText = await readPageText(token, page.id);
+      const bodyText = await readPageText(token, page.id, stage);
+      done += 1;
+
+      stage("BODY_INDEX_PAGE_DONE", {
+        done,
+        total: pages.length,
+        title: getTitle(page),
+        chars: bodyText.length,
+        ms: Date.now() - pageStarted
+      });
 
       return {
         id: page.id,
@@ -236,7 +360,16 @@ async function getOrBuildBodyIndex(token) {
         text: bodyText
       };
     } catch (err) {
-      console.error(`페이지 본문 조회 실패: ${page.id}`, err?.message || err);
+      failed += 1;
+      stage("BODY_INDEX_PAGE_FAILED", {
+        failed,
+        total: pages.length,
+        pageId: page.id,
+        title: getTitle(page),
+        message: err?.message || String(err),
+        ms: Date.now() - pageStarted
+      });
+
       return {
         id: page.id,
         title: getTitle(page),
@@ -252,19 +385,27 @@ async function getOrBuildBodyIndex(token) {
     pages: indexed
   };
 
+  stage("BODY_INDEX_BUILD_COMPLETE", {
+    pages: indexed.length,
+    failed
+  });
+
   return {
     pages: indexed,
     cached: false
   };
 }
 
-async function listAccessiblePages(token) {
+async function listAccessiblePages(token, stage) {
   const maxPages = clampNumber(process.env.MAX_SCAN_PAGES, 5, 200, 50);
 
   const pages = [];
   let cursor = undefined;
+  let call = 0;
 
   while (pages.length < maxPages) {
+    call += 1;
+
     const body = {
       page_size: Math.min(100, maxPages - pages.length),
       sort: {
@@ -277,7 +418,9 @@ async function listAccessiblePages(token) {
 
     const data = await notionFetch(token, "/search", {
       method: "POST",
-      body
+      body,
+      stage,
+      label: `PAGE_LIST_${call}`
     });
 
     const results = Array.isArray(data.results) ? data.results : [];
@@ -289,6 +432,13 @@ async function listAccessiblePages(token) {
       }
     }
 
+    stage("PAGE_LIST_BATCH", {
+      call,
+      returned: results.length,
+      pageObjects: pages.length,
+      hasMore: !!data.has_more
+    });
+
     if (!data.has_more || !data.next_cursor) break;
     cursor = data.next_cursor;
   }
@@ -298,10 +448,10 @@ async function listAccessiblePages(token) {
 
 
 // -----------------------------------------------------------------------------
-// 페이지 블록 본문 읽기
+// 페이지 본문 읽기
 // -----------------------------------------------------------------------------
 
-async function readPageText(token, pageId) {
+async function readPageText(token, pageId, stage) {
   const maxDepth = clampNumber(process.env.MAX_BLOCK_DEPTH, 0, 5, 2);
   const maxBlocks = clampNumber(process.env.MAX_BLOCKS_PER_PAGE, 50, 1000, 300);
 
@@ -315,7 +465,8 @@ async function readPageText(token, pageId) {
     maxDepth,
     maxBlocks,
     collected,
-    counter
+    counter,
+    stage
   );
 
   return normalizeSpace(collected.join("\n"));
@@ -328,23 +479,25 @@ async function readChildrenRecursive(
   maxDepth,
   maxBlocks,
   collected,
-  counter
+  counter,
+  stage
 ) {
   if (counter.value >= maxBlocks) return;
 
   let cursor = undefined;
 
   do {
-    const qs = new URLSearchParams({
-      page_size: "100"
-    });
-
+    const qs = new URLSearchParams({ page_size: "100" });
     if (cursor) qs.set("start_cursor", cursor);
 
     const data = await notionFetch(
       token,
       `/blocks/${encodeURIComponent(blockId)}/children?${qs.toString()}`,
-      { method: "GET" }
+      {
+        method: "GET",
+        stage,
+        label: "BLOCK_CHILDREN"
+      }
     );
 
     const blocks = Array.isArray(data.results) ? data.results : [];
@@ -368,7 +521,8 @@ async function readChildrenRecursive(
           maxDepth,
           maxBlocks,
           collected,
-          counter
+          counter,
+          stage
         );
       }
     }
@@ -382,12 +536,11 @@ function blockToText(block) {
 
   const data = block[block.type];
 
-  // 대부분의 텍스트 블록
   if (data && Array.isArray(data.rich_text)) {
     const rich = richTextToPlain(data.rich_text);
     const extras = [];
 
-    if (typeof data.caption === "object" && Array.isArray(data.caption)) {
+    if (Array.isArray(data.caption)) {
       const caption = richTextToPlain(data.caption);
       if (caption) extras.push(caption);
     }
@@ -395,16 +548,9 @@ function blockToText(block) {
     return normalizeSpace([rich, ...extras].filter(Boolean).join(" "));
   }
 
-  // child_page / child_database 제목
-  if (block.type === "child_page") {
-    return normalizeSpace(data?.title || "");
-  }
+  if (block.type === "child_page") return normalizeSpace(data?.title || "");
+  if (block.type === "child_database") return normalizeSpace(data?.title || "");
 
-  if (block.type === "child_database") {
-    return normalizeSpace(data?.title || "");
-  }
-
-  // bookmark/embed/link_preview URL도 검색 가능하게 포함
   if (
     ["bookmark", "embed", "link_preview"].includes(block.type) &&
     typeof data?.url === "string"
@@ -412,7 +558,6 @@ function blockToText(block) {
     return data.url;
   }
 
-  // equation
   if (block.type === "equation" && typeof data?.expression === "string") {
     return data.expression;
   }
@@ -422,7 +567,7 @@ function blockToText(block) {
 
 
 // -----------------------------------------------------------------------------
-// 본문 검색 / 점수
+// 본문 검색
 // -----------------------------------------------------------------------------
 
 function searchBodyIndex(pages, query) {
@@ -443,7 +588,6 @@ function searchBodyIndex(pages, query) {
     const titleTokenHits = tokens.filter(t => titleNorm.includes(t)).length;
     const bodyTokenHits = tokens.filter(t => bodyNorm.includes(t)).length;
 
-    // 구문 또는 토큰 하나라도 맞으면 후보
     if (
       !titlePhrase &&
       !bodyPhrase &&
@@ -482,7 +626,7 @@ function searchBodyIndex(pages, query) {
   });
 }
 
-function mergeResults(titleResults, bodyResults, query) {
+function mergeResults(titleResults, bodyResults) {
   const map = new Map();
 
   for (const item of bodyResults) {
@@ -527,9 +671,7 @@ function makeSnippet(text, query) {
     }
   }
 
-  if (pos < 0) {
-    return truncate(source, 220);
-  }
+  if (pos < 0) return truncate(source, 220);
 
   const before = 80;
   const after = 180;
@@ -541,11 +683,14 @@ function makeSnippet(text, query) {
 
 
 // -----------------------------------------------------------------------------
-// Notion API 공통 호출 + 429 재시도
+// Notion API
 // -----------------------------------------------------------------------------
 
 async function notionFetch(token, path, options = {}) {
   const method = options.method || "GET";
+  const stage = options.stage || (() => {});
+  const label = options.label || path;
+
   const headers = {
     "Authorization": `Bearer ${token}`,
     "Notion-Version": NOTION_VERSION,
@@ -555,6 +700,15 @@ async function notionFetch(token, path, options = {}) {
   let lastResponse;
 
   for (let attempt = 0; attempt < 4; attempt++) {
+    const started = Date.now();
+
+    stage("NOTION_API_CALL", {
+      label,
+      method,
+      path: sanitizeNotionPath(path),
+      attempt: attempt + 1
+    });
+
     const response = await fetch(`${NOTION_API}${path}`, {
       method,
       headers,
@@ -566,18 +720,31 @@ async function notionFetch(token, path, options = {}) {
 
     lastResponse = response;
 
+    stage("NOTION_API_RESPONSE", {
+      label,
+      status: response.status,
+      ms: Date.now() - started,
+      attempt: attempt + 1
+    });
+
     if (response.status !== 429) {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         const message = data?.message || `Notion API HTTP ${response.status}`;
-        throw new Error(message);
+        throw new Error(`${label}: ${message}`);
       }
 
       return data;
     }
 
     const retryAfter = Number(response.headers.get("retry-after") || "1");
+
+    stage("NOTION_RATE_LIMIT_RETRY", {
+      label,
+      retryAfterSeconds: retryAfter
+    });
+
     await sleep(Math.max(1000, retryAfter * 1000));
   }
 
@@ -589,6 +756,62 @@ async function notionFetch(token, path, options = {}) {
 // -----------------------------------------------------------------------------
 // helpers
 // -----------------------------------------------------------------------------
+
+function makeStageLogger(requestId) {
+  const zero = Date.now();
+
+  return (name, data = undefined) => {
+    const ms = Date.now() - zero;
+    const prefix = `[JANDI-NOTION][${requestId}][+${ms}ms][${name}]`;
+
+    if (data === undefined) {
+      console.log(prefix);
+    } else {
+      console.log(prefix, safeJson(data));
+    }
+  };
+}
+
+function jandiResponse(res, body, requestId, startedAt) {
+  console.log(
+    `[JANDI-NOTION][${requestId}][RESPONSE]`,
+    safeJson({ totalMs: Date.now() - startedAt, bodyLength: String(body || "").length })
+  );
+
+  return res.status(200).json({
+    body: truncate(body, 4500),
+    connectColor: "#000000"
+  });
+}
+
+function makeRequestId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function maskPresence(value) {
+  if (!value) return "MISSING";
+  return `SET(length=${String(value).length})`;
+}
+
+function safeJson(data) {
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
+}
+
+function sanitizeNotionPath(path) {
+  return String(path).replace(
+    /\/blocks\/([0-9a-f-]{20,})\/children/i,
+    "/blocks/{block_id}/children"
+  );
+}
+
+function formatMs(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}초`;
+}
 
 function getTitle(item) {
   if (item?.properties && typeof item.properties === "object") {
@@ -667,6 +890,7 @@ function dateValue(value) {
 
 function formatDate(value) {
   if (!value) return "";
+
   try {
     return new Intl.DateTimeFormat("ko-KR", {
       timeZone: "Asia/Seoul",
