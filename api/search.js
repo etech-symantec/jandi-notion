@@ -18,6 +18,7 @@ export default async function handler(req, res) {
 
   try {
     const q = String(req.query?.q || "").replace(/\s+/g, " ").trim();
+    const source = String(req.query?.source || "all").toLowerCase();
     const requested = Number(req.query?.perPage);
     const perPage = requested === 20 ? 20 : 10;
     const page = clampNumber(req.query?.page, 1, 100000, 1);
@@ -56,13 +57,27 @@ export default async function handler(req, res) {
         )
       : [];
 
-    const all = [...notionResults, ...broadcomResults]
+    const merged = [...notionResults, ...broadcomResults]
       .sort((a, b) => {
         if ((b.score || 0) !== (a.score || 0)) {
           return (b.score || 0) - (a.score || 0);
         }
         return String(a.title).localeCompare(String(b.title), "ko");
       });
+
+    const sourceCounts = {
+      all: merged.length,
+      notion: notionResults.length,
+      kb: broadcomResults.length
+    };
+
+    const all =
+      source === "notion"
+        ? notionResults
+        : source === "kb"
+          ? broadcomResults
+          : merged;
+
     const total = all.length;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const safePage = Math.min(page, totalPages);
@@ -72,6 +87,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       query: q,
+      source,
+      sourceCounts,
       page: safePage,
       perPage,
       total,

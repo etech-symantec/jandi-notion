@@ -34,6 +34,17 @@ mark{background:var(--mark);color:var(--markText);padding:0 2px;border-radius:3p
 .pageBtn{min-width:40px;height:40px;padding:0 11px;background:#1f2937;color:#e5e7eb;border:1px solid #374151}
 .pageBtn.active{background:#2563eb;border-color:#3b82f6}.pageBtn:disabled{opacity:.4;cursor:not-allowed}
 .empty,.loading{text-align:center;padding:50px 20px;color:var(--muted);background:#111827;border:1px solid var(--line);border-radius:14px}
+
+.filterbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.filterBtn{height:36px;padding:0 14px;border-radius:999px;border:1px solid #475569;background:#1f2937;color:#e5e7eb;font-weight:800}
+.filterBtn.active{outline:2px solid #60a5fa;outline-offset:1px}
+.filterBtn.notion{background:#fff;color:#111827;border-color:#d1d5db}
+.filterBtn.kb{background:#cc092f;color:#fff;border-color:#cc092f}
+.sourceTag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:800;cursor:pointer;border:1px solid transparent}
+.sourceTag.notion{background:#fff;color:#111827;border-color:#d1d5db}
+.sourceTag.kb{background:#cc092f;color:#fff;border-color:#cc092f}
+.sourceTag:hover{filter:brightness(.96)}
+
 @media(max-width:680px){.searchbar{flex-wrap:wrap}.searchbar input{flex-basis:100%}button,select{height:42px}.wrap{padding:18px 12px 40px}.hero{padding:17px}}
 </style>
 </head>
@@ -50,6 +61,11 @@ mark{background:var(--mark);color:var(--markText);padding:0 2px;border-radius:3p
       <button id="searchBtn">검색</button>
     </div>
     <div class="meta" id="meta"></div>
+    <div class="filterbar" id="filterbar">
+      <button class="filterBtn active" data-source="all">전체</button>
+      <button class="filterBtn notion" data-source="notion">Notion</button>
+      <button class="filterBtn kb" data-source="kb">KB</button>
+    </div>
     <div style="margin-top:10px;color:#94a3b8;font-size:13px">
       조건 검색: <strong style="color:#e5e7eb">&amp;</strong> = AND,
       <strong style="color:#e5e7eb">|</strong> = OR
@@ -61,7 +77,7 @@ mark{background:var(--mark);color:var(--markText);padding:0 2px;border-radius:3p
 </div>
 <script>
 const $=id=>document.getElementById(id);
-let current={q:"",page:1,perPage:10};
+let current={q:"",page:1,perPage:10,source:"all"};
 
 function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function escRegExp(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}
@@ -97,6 +113,7 @@ function setUrl(){
   url.searchParams.set("q",current.q);
   url.searchParams.set("page",current.page);
   url.searchParams.set("perPage",current.perPage);
+  url.searchParams.set("source",current.source);
   history.replaceState(null,"",url);
 }
 async function load(){
@@ -107,7 +124,7 @@ async function load(){
   $("results").innerHTML='<div class="loading">검색 중...</div>';
   $("pagination").innerHTML="";
   setUrl();
-  const api=`/api/search?q=${encodeURIComponent(current.q)}&page=${current.page}&perPage=${current.perPage}`;
+  const api=`/api/search?q=${encodeURIComponent(current.q)}&page=${current.page}&perPage=${current.perPage}&source=${encodeURIComponent(current.source)}`;
   const r=await fetch(api,{cache:"no-store"});
   const data=await r.json();
   if(!r.ok||!data.ok){
@@ -118,8 +135,9 @@ async function load(){
     `검색어: <strong>${esc(data.query)}</strong>`,
     `전체 결과: <strong>${data.total}건</strong>`,
     `현재 페이지: <strong>${data.page}/${data.totalPages||1}</strong>`,
-    `Notion: <strong>${data.searchIndex?.pageCount??0}개</strong>`,
-    `Broadcom: <strong>${data.searchIndex?.broadcomPageCount??0}개</strong>`,
+    `검색 결과: <strong>${data.total}건</strong>`,
+    `Notion 일치: <strong>${data.sourceCounts?.notion??0}건</strong>`,
+    `KB 일치: <strong>${data.sourceCounts?.kb??0}건</strong>`,
     `마지막 갱신: <strong>${esc(data.searchIndex?.createdAtKst||"-")}</strong>`
   ].map(v=>`<span>${v}</span>`).join("");
 
@@ -132,13 +150,14 @@ async function load(){
     const badges=[];
     if(item.titleMatch)badges.push("제목 일치");
     if(item.bodyMatch)badges.push("본문 일치");
-    badges.unshift(item.source === "Broadcom" ? "KB" : "Notion");
+    const sourceKey=item.source==="Broadcom"?"kb":"notion";
+    const sourceText=item.source==="Broadcom"?"KB":"Notion";
     return `<article class="card">
       <div class="titleRow">
         <div class="rank">${item.rank}</div>
         <div style="flex:1;min-width:0">
           <div class="title"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${highlight(item.title,data.query)}</a></div>
-          <div class="badges">${badges.map(v=>`<span class="badge">${esc(v)}</span>`).join("")}</div>
+          <div class="badges"><span class="sourceTag ${sourceKey}" data-filter-source="${sourceKey}">${sourceText}</span>${badges.map(v=>`<span class="badge">${esc(v)}</span>`).join("")}</div>
           <div class="snippet">${highlight(item.snippet||"",data.query)}</div>
           <div class="footerMeta"><span>최근 수정: ${esc(formatDate(item.lastEdited))}</span></div>
         </div>
@@ -168,6 +187,28 @@ function renderPagination(data){
     current.page=Number(btn.dataset.page);load();window.scrollTo({top:0,behavior:"smooth"});
   }));
 }
+
+function setSourceFilter(source){
+  current.source=["notion","kb"].includes(source)?source:"all";
+  current.page=1;
+
+  document.querySelectorAll("[data-source]").forEach(btn=>{
+    btn.classList.toggle("active",btn.dataset.source===current.source);
+  });
+
+  load();
+}
+
+document.querySelectorAll("[data-source]").forEach(btn=>{
+  btn.addEventListener("click",()=>setSourceFilter(btn.dataset.source));
+});
+
+document.addEventListener("click",e=>{
+  const tag=e.target.closest("[data-filter-source]");
+  if(!tag)return;
+  setSourceFilter(tag.dataset.filterSource);
+});
+
 function startSearch(){current.q=$("q").value.trim();current.perPage=Number($("perPage").value)===20?20:10;current.page=1;load()}
 $("searchBtn").onclick=startSearch;
 $("q").addEventListener("keydown",e=>{if(e.key==="Enter")startSearch()});
@@ -176,7 +217,9 @@ const params=new URLSearchParams(location.search);
 current.q=params.get("q")||"";
 current.page=Math.max(1,Number(params.get("page")||1));
 current.perPage=Number(params.get("perPage"))===20?20:10;
+current.source=["notion","kb"].includes(params.get("source"))?params.get("source"):"all";
 $("q").value=current.q;$("perPage").value=String(current.perPage);
+document.querySelectorAll("[data-source]").forEach(btn=>btn.classList.toggle("active",btn.dataset.source===current.source));
 load();
 </script>
 </body>

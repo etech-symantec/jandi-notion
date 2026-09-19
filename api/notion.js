@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v4.0",
+      service: "JANDI Notion Search v4.1",
       endpoint: "/api/notion",
       searchPage: "/search",
       syntax: { and: "&", or: "|", precedence: "& before |" }
@@ -79,15 +79,12 @@ export default async function handler(req, res) {
       ? searchBroadcomIndex(broadcomIndex, query, parsedBoolean)
       : [];
 
-    const allResults = [...notionResults, ...broadcomResults]
-      .sort((a, b) => {
-        if ((b.score || 0) !== (a.score || 0)) {
-          return (b.score || 0) - (a.score || 0);
-        }
-        return String(a.title).localeCompare(String(b.title), "ko");
-      });
-    const results = allResults.slice(0, maxResults);
-    const total = allResults.length;
+    const notionTop = notionResults.slice(0, 5);
+    const kbTop = broadcomResults.slice(0, 5);
+
+    const totalNotion = notionResults.length;
+    const totalKb = broadcomResults.length;
+    const total = totalNotion + totalKb;
 
     const baseUrl = getBaseUrl(req);
     const searchUrl =
@@ -99,32 +96,39 @@ export default async function handler(req, res) {
     const lines = [
       "🔎 **Notion 검색 결과**",
       "",
-      `🔍 ${escapeMarkdown(query)}   ·   ${total}건   ·   ${mode}`,
+      `🔍 ${escapeMarkdown(query)}   ·   총 ${total}건   ·   ${mode}`,
       `📚 Notion ${index.pageCount || index.pages?.length || 0} · KB ${broadcomIndex?.pageCount || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
       ""
     ];
 
-    if (!results.length) {
+    if (!notionTop.length && !kbTop.length) {
       lines.push("검색 결과가 없습니다.");
     } else {
-      for (let i = 0; i < results.length; i++) {
-        const item = results[i];
-        const sourceLabel =
-          item.source === "Broadcom" ? "[KB]" : "[Notion]";
+      if (notionTop.length) {
+        lines.push(`**Notion ${Math.min(5, notionTop.length)}/${totalNotion}**`);
+        for (let i = 0; i < notionTop.length; i++) {
+          const item = notionTop[i];
+          lines.push(
+            `${i + 1}. [Notion] [${escapeMarkdown(item.title)}](${item.url})`
+          );
+        }
+      }
 
-        lines.push(
-          `${i + 1}. ${sourceLabel} [${escapeMarkdown(item.title)}](${item.url})`
-        );
+      if (kbTop.length) {
+        if (notionTop.length) lines.push("");
+        lines.push(`**KB ${Math.min(5, kbTop.length)}/${totalKb}**`);
+        for (let i = 0; i < kbTop.length; i++) {
+          const item = kbTop[i];
+          lines.push(
+            `${i + 1}. [KB] [${escapeMarkdown(item.title)}](${item.url})`
+          );
+        }
       }
     }
 
     if (total > 0) {
       lines.push("");
-      if (total > results.length) {
-        lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
-      } else {
-        lines.push(`🌐 [웹에서 보기](${searchUrl})`);
-      }
+      lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
     }
 
     return res.status(200).json({

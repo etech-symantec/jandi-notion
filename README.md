@@ -1,86 +1,66 @@
-# JANDI → Notion + Broadcom KB 검색 v4.0
+# JANDI → Notion + Broadcom KB 검색 v4.1
 
-## 핵심 변경
+## 1. Broadcom도 배치 분할
 
-Broadcom Knowledge Base를 제목뿐 아니라 본문까지 인덱싱합니다.
+Broadcom KB 인덱싱도 Notion처럼 분할 처리합니다.
 
-검색 대상:
-- Notion 제목 + 본문
-- Broadcom KB 제목 + 본문
+- `/api/broadcom/start?token=...`
+- `/api/broadcom/next?token=...`
+- `/api/broadcom/status?token=...`
 
-잔디 결과의 출처 표시는 뒤쪽 `N`, `B` 대신 앞쪽에 표시합니다.
+기본 배치 크기:
+`BROADCOM_BATCH_SIZE=15`
+
+5분 GitHub worker가 Notion과 Broadcom의 `running` 작업을 각각 확인해 다음 배치를 처리합니다.
+
+## 2. 잔디 검색 결과
+
+Notion 최대 5개 + KB 최대 5개를 각각 표시합니다.
 
 예:
 
-1. [Notion] SSP Sizing Guide
-2. [KB] Error Message "Licensing : License key not installed..."
+Notion 5/23
+1. [Notion] ...
+2. [Notion] ...
 
-## Broadcom 인덱싱 방식
+KB 5/18
+1. [KB] ...
+2. [KB] ...
 
-### 최초 실행
-처음에는 Broadcom sitemap에서 `external/article/` URL을 모은 뒤
-각 문서의 제목과 본문을 가져와 `broadcom-index.json`에 저장합니다.
+전체 결과는 웹페이지에서 확인합니다.
 
-### 이후 실행
-기존 Broadcom 인덱스를 읽은 뒤 증분 갱신합니다.
+## 3. 웹 검색 필터
 
-- sitemap `lastmod`가 이전 값과 동일하면 기존 본문 재사용
-- sitemap에 `lastmod`가 없는 문서는 `BROADCOM_REFRESH_AGE_DAYS` 이내면 기존 본문 재사용
-- 신규 또는 변경된 문서만 다시 가져옴
-- 갱신 실패 시 기존 레코드가 있으면 기존 내용을 유지
+상단에:
+- 전체
+- Notion
+- KB
 
-따라서 매번 전체 본문을 다시 다운로드하지 않습니다.
+필터 버튼을 추가했습니다.
 
-## 기본 환경변수
+또 각 검색 결과 카드의 출처 태그를 클릭해도 해당 출처만 필터링됩니다.
 
-BROADCOM_MAX_PAGES=10000
-BROADCOM_BATCH_SIZE=20
-BROADCOM_CONCURRENCY=3
-BROADCOM_MAX_BODY_CHARS=30000
-BROADCOM_REFRESH_AGE_DAYS=7
+태그 스타일:
+- Notion: 흰색 배경 + 검은 글씨
+- KB: Broadcom 계열 빨간색 배경 + 흰 글씨
 
-필요하면 값을 낮춰 Vercel Hobby 부하를 줄일 수 있습니다.
+## 4. 기존 기능 유지
 
-## Broadcom 최초 인덱싱
+- `&` = AND
+- `|` = OR
+- 제목/본문 검색
+- 검색어 강조
+- 페이지당 10/20개
+- 08:00 / 12:00 / 15:00 / 19:00 KST 자동 갱신
 
-증분 모드:
-`/api/broadcom/reindex?token=REINDEX_TOKEN`
+## 5. 최초 Broadcom 인덱싱
 
-강제 전체 재수집:
-`/api/broadcom/reindex?token=REINDEX_TOKEN&full=true`
+배포 후:
+`/api/broadcom/start?token=REINDEX_TOKEN`
 
-일반 운영에서는 증분 모드를 권장합니다.
+을 한 번 호출하면 됩니다.
 
-## 자동 갱신
+그 뒤 GitHub Actions의 5분 worker가 자동으로 `/api/broadcom/next`를 반복 호출해서 완료합니다.
 
-기존 한국시간:
-- 08:00
-- 12:00
-- 15:00
-- 19:00
-
-scheduled workflow에서 Broadcom KB도 증분 갱신합니다.
-
-## 검색 예
-
-`/노션 Licensing`
-
-→ Notion과 Broadcom KB 제목/본문 모두 검색
-
-`/노션 License & ProxySG`
-
-→ 두 단어가 모두 포함된 문서 검색
-
-`/노션 Licensing | Subscription`
-
-→ 둘 중 하나가 포함된 문서 검색
-
-## 출처 표시
-
-- `[Notion]` = Notion
-- `[KB]` = Broadcom Knowledge Base
-
-## 기존 Notion 인덱스
-
-기존 Notion 인덱스는 그대로 사용할 수 있습니다.
-Broadcom 인덱스만 최초 1회 생성하면 됩니다.
+상태 확인:
+`/api/broadcom/status?token=REINDEX_TOKEN`
