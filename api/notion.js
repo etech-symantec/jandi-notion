@@ -3,7 +3,9 @@ import {
   clampNumber,
   escapeMarkdown,
   formatDate,
-  truncate
+  truncate,
+  highlightMarkdown,
+  normalizeSpace
 } from "../lib/common.js";
 import { readJsonBlob } from "../lib/blob.js";
 import { searchIndex } from "../lib/search.js";
