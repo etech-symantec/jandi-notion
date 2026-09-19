@@ -1,0 +1,95 @@
+name: Notion Reindex Worker
+
+on:
+  schedule:
+    # GitHub Actions scheduled workflows use UTC.
+    # Every 5 minutes. GitHub may delay scheduled jobs during busy periods.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notion-reindex-worker
+  cancel-in-progress: false
+
+jobs:
+  process-next-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      BASE_URL: https://jandi-notion-search.vercel.app
+      REINDEX_TOKEN: ${{ secrets.REINDEX_TOKEN }}
+
+    steps:
+      - name: Validate secret
+        shell: bash
+        run: |
+          if [ -z "$REINDEX_TOKEN" ]; then
+            echo "::error::GitHub repository secret REINDEX_TOKEN is not configured."
+            exit 1
+          fi
+
+      - name: Check reindex status
+        id: status
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATUS_JSON="$(curl --fail --silent --show-error \
+            --max-time 30 \
+            "${BASE_URL}/api/reindex/status?token=${REINDEX_TOKEN}")"
+
+          echo "$STATUS_JSON"
+
+          STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
+          EXISTS="$(echo "$STATUS_JSON" | jq -r '.exists // false')"
+          PROGRESS="$(echo "$STATUS_JSON" | jq -r '.progress // 0')"
+          PROCESSED="$(echo "$STATUS_JSON" | jq -r '.processedPages // 0')"
+          TOTAL="$(echo "$STATUS_JSON" | jq -r '.totalPages // 0')"
+
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+
+          echo "Current state: status=${STATUS:-none}, progress=${PROGRESS}%, processed=${PROCESSED}/${TOTAL}"
+
+      - name: Process next batch
+        if: steps.status.outputs.exists == 'true' && steps.status.outputs.status == 'running'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Reindex is running. Processing next batch..."
+
+          RESULT="$(curl --fail --silent --show-error \
+            --max-time 290 \
+            "${BASE_URL}/api/reindex/next?token=${REINDEX_TOKEN}")"
+
+          echo "$RESULT"
+
+          OK="$(echo "$RESULT" | jq -r '.ok // false')"
+          if [ "$OK" != "true" ]; then
+            echo "::error::Batch processing returned ok=false"
+            exit 1
+          fi
+
+          ACTION="$(echo "$RESULT" | jq -r '.action // "unknown"')"
+          PROGRESS="$(echo "$RESULT" | jq -r '.progress // 0')"
+          PROCESSED="$(echo "$RESULT" | jq -r '.processedPages // .pageCount // 0')"
+          TOTAL="$(echo "$RESULT" | jq -r '.totalPages // .pageCount // 0')"
+
+          echo "Action: $ACTION"
+          echo "Progress: ${PROGRESS}% (${PROCESSED}/${TOTAL})"
+
+      - name: Skip when no active reindex
+        if: steps.status.outputs.exists != 'true' || steps.status.outputs.status != 'running'
+        shell: bash
+        run: |
+          STATUS="${{ steps.status.outputs.status }}"
+          if [ -z "$STATUS" ]; then
+            echo "No reindex state exists. Open /reindex and click '새 인덱싱 시작' first."
+          else
+            echo "No batch required. Current status: $STATUS"
+          fi
