@@ -3,12 +3,10 @@ import {
   clampNumber,
   escapeMarkdown,
   formatDate,
-  truncate,
-  highlightMarkdown,
-  normalizeSpace
+  truncate
 } from "../lib/common.js";
 import { readJsonBlob } from "../lib/blob.js";
-import { searchIndex } from "../lib/search.js";
+import { searchIndex, parseBooleanQuery } from "../lib/search.js";
 
 let memoryCache = { loadedAt: 0, index: null };
 
@@ -18,16 +16,10 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v3.4",
+      service: "JANDI Notion Search v3.5",
       endpoint: "/api/notion",
       searchPage: "/search",
-      features: [
-        "잔디 기본 목록 10개",
-        "전체 검색 건수",
-        "전체 결과 웹페이지",
-        "웹 검색어 강조",
-        "웹 페이지당 10/20개"
-      ]
+      syntax: { and: "&", or: "|", precedence: "& before |" }
     });
   }
 
@@ -52,7 +44,14 @@ export default async function handler(req, res) {
     if (!query) {
       return jandi(
         res,
-        "🔎 **Notion 검색**\n\n검색어를 입력해주세요.\n예: `/노션 tcp auto buffer`"
+        [
+          "🔎 **Notion 검색**",
+          "",
+          "검색어를 입력해주세요.",
+          "예: `/노션 ELK`",
+          "AND: `/노션 ELK & Ubuntu`",
+          "OR: `/노션 ELK | Kibana`"
+        ].join("\n")
       );
     }
 
@@ -70,88 +69,47 @@ export default async function handler(req, res) {
     const results = allResults.slice(0, maxResults);
     const total = allResults.length;
 
-    if (!results.length) {
-      return jandi(
-        res,
-        [
-          "🔎 **Notion 검색 결과**",
-          "",
-          `검색어: **${escapeMarkdown(query)}**`,
-          "전체 결과: **0건**",
-          "",
-          `📚 인덱스: ${index.pageCount || index.pages?.length || 0}개`,
-          `🕒 마지막 갱신: ${formatDate(index.createdAt)}`
-        ].join("\n")
-      );
-    }
-
     const baseUrl = getBaseUrl(req);
     const searchUrl =
       `${baseUrl}/search?q=${encodeURIComponent(query)}&perPage=10&page=1`;
+
+    const parsed = parseBooleanQuery(query);
+    const mode = parsed.hasOperators ? "조건 검색" : "일반 검색";
 
     const lines = [
       "🔎 **Notion 검색 결과**",
       "",
       `검색어: **${escapeMarkdown(query)}**`,
       `전체 결과: **${total}건**`,
-      `표시: **상위 ${results.length}건**`,
-      `검색시간: ${Date.now() - started}ms`,
+      `검색 방식: ${mode}`,
       ""
     ];
 
-    const connectInfo = [];
-
-    for (let i = 0; i < results.length; i++) {
-      const item = results[i];
-      const badges = [];
-
-      if (item.titleMatch) badges.push("제목");
-      if (item.bodyMatch) badges.push("본문");
-
-      const badgeText = badges.length ? ` [${badges.join("+")}]` : "";
-      const preview = item.snippet
-        ? highlightMarkdown(
-            truncate(normalizeSpace(item.snippet), 160),
-            query
-          )
-        : "";
-
-      lines.push(
-        `${i + 1}. [${escapeMarkdown(item.title)}](${item.url})${badgeText}`
-      );
-
-      if (preview) {
-        lines.push(`   └ ${preview}`);
-      }
-
-      if (i < 5) {
-        connectInfo.push({
-          title: `${i + 1}. ${item.title}${badgeText}`,
-          description: [
-            preview ? truncate(preview, 320) : "",
-            item.lastEdited
-              ? `최근 수정: ${formatDate(item.lastEdited)}`
-              : "",
-            item.url
-          ].filter(Boolean).join("\n\n")
-        });
+    if (!results.length) {
+      lines.push("검색 결과가 없습니다.");
+    } else {
+      for (let i = 0; i < results.length; i++) {
+        const item = results[i];
+        lines.push(`${i + 1}. [${escapeMarkdown(item.title)}](${item.url})`);
       }
     }
 
     lines.push("");
+
     if (total > results.length) {
       lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
-    } else {
-      lines.push(`🌐 [웹에서 보기](${searchUrl})`);
+    } else if (total > 0) {
+      lines.push(`🌐 [웹에서 결과 보기](${searchUrl})`);
     }
+
     lines.push("");
     lines.push(`📚 인덱스: ${index.pageCount || index.pages?.length || 0}개`);
     lines.push(`🕒 마지막 갱신: ${formatDate(index.createdAt)}`);
+    lines.push(`⏱ 검색시간: ${Date.now() - started}ms`);
 
     return res.status(200).json({
       body: truncate(lines.join("\n"), 4500),
-      connectColor: "#2563EB",
-      connectInfo
+      connectColor: "#2563EB"
     });
 
   } catch (error) {

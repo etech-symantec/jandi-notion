@@ -50,6 +50,11 @@ mark{background:var(--mark);color:var(--markText);padding:0 2px;border-radius:3p
       <button id="searchBtn">검색</button>
     </div>
     <div class="meta" id="meta"></div>
+    <div style="margin-top:10px;color:#94a3b8;font-size:13px">
+      조건 검색: <strong style="color:#e5e7eb">&amp;</strong> = AND,
+      <strong style="color:#e5e7eb">|</strong> = OR
+      &nbsp;·&nbsp; 예: <code>ELK &amp; Ubuntu | Kibana</code>
+    </div>
   </div>
   <div class="results" id="results"></div>
   <div class="pagination" id="pagination"></div>
@@ -60,9 +65,29 @@ let current={q:"",page:1,perPage:10};
 
 function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
 function escRegExp(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}
+function queryTerms(query){
+  const raw=String(query||"").trim();
+
+  if(raw.includes("&")||raw.includes("|")){
+    return [...new Set(
+      raw.split(/[&|]/)
+        .map(v=>v.trim())
+        .filter(v=>v.length>=1)
+        .sort((a,b)=>b.length-a.length)
+    )];
+  }
+
+  return [...new Set(
+    [raw,...raw.split(/\s+/)]
+      .map(v=>v.trim())
+      .filter(v=>v.length>=2)
+      .sort((a,b)=>b.length-a.length)
+  )];
+}
+
 function highlight(text,query){
   let out=esc(text||"");
-  const terms=[...new Set([query,...String(query||"").split(/\s+/)].map(v=>v.trim()).filter(v=>v.length>=2).sort((a,b)=>b.length-a.length))];
+  const terms=queryTerms(query);
   if(!terms.length)return out;
   const pattern=terms.map(escRegExp).join("|");
   return out.replace(new RegExp(`(${pattern})`,"gi"),"<mark>$1</mark>");

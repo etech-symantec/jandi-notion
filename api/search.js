@@ -67,7 +67,9 @@ export default async function handler(req, res) {
         titleMatch: !!item.titleMatch,
         bodyMatch: !!item.bodyMatch,
         snippet: item.snippet || "",
-        score: item.score
+        score: item.score,
+        matchedTerms: item.matchedTerms || [],
+        booleanMatch: !!item.booleanMatch
       }))
     });
 
