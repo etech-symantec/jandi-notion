@@ -1,66 +1,52 @@
-# JANDI → Notion + Broadcom KB 검색 v4.1
+# JANDI → Notion + Broadcom KB 검색 v4.2
+## Vercel Hobby Serverless Function 제한 대응
 
-## 1. Broadcom도 배치 분할
+v4.1의 Broadcom API 4개를 1개로 통합했습니다.
 
-Broadcom KB 인덱싱도 Notion처럼 분할 처리합니다.
+기존:
+- api/broadcom/start.js
+- api/broadcom/next.js
+- api/broadcom/status.js
+- api/broadcom/reindex.js
 
-- `/api/broadcom/start?token=...`
-- `/api/broadcom/next?token=...`
-- `/api/broadcom/status?token=...`
+v4.2:
+- api/broadcom.js
 
-기본 배치 크기:
-`BROADCOM_BATCH_SIZE=15`
+사용법:
 
-5분 GitHub worker가 Notion과 Broadcom의 `running` 작업을 각각 확인해 다음 배치를 처리합니다.
+시작:
+`/api/broadcom?action=start&token=REINDEX_TOKEN`
 
-## 2. 잔디 검색 결과
+다음 배치:
+`/api/broadcom?action=next&token=REINDEX_TOKEN`
 
-Notion 최대 5개 + KB 최대 5개를 각각 표시합니다.
+상태:
+`/api/broadcom?action=status&token=REINDEX_TOKEN`
 
-예:
+GitHub Actions workflow도 새 URL을 사용하도록 수정되어 있습니다.
 
-Notion 5/23
-1. [Notion] ...
-2. [Notion] ...
+## 중요한 배포 주의
 
-KB 5/18
-1. [KB] ...
-2. [KB] ...
+GitHub 저장소에서 예전 API 파일이 남아 있으면 Vercel은 그대로 Serverless Function으로 계산합니다.
 
-전체 결과는 웹페이지에서 확인합니다.
+특히 다음 경로가 남아 있으면 삭제하세요:
 
-## 3. 웹 검색 필터
+- api/broadcom/start.js
+- api/broadcom/next.js
+- api/broadcom/status.js
+- api/broadcom/reindex.js
+- 과거 버전의 api/reindex/cron.js
 
-상단에:
-- 전체
-- Notion
-- KB
+v4.2 ZIP으로 저장소를 완전히 맞춘 뒤 배포하는 것을 권장합니다.
 
-필터 버튼을 추가했습니다.
+## 기능 유지
 
-또 각 검색 결과 카드의 출처 태그를 클릭해도 해당 출처만 필터링됩니다.
-
-태그 스타일:
-- Notion: 흰색 배경 + 검은 글씨
-- KB: Broadcom 계열 빨간색 배경 + 흰 글씨
-
-## 4. 기존 기능 유지
-
-- `&` = AND
-- `|` = OR
-- 제목/본문 검색
-- 검색어 강조
-- 페이지당 10/20개
+- Broadcom 제목+본문 배치 인덱싱
+- Notion + Broadcom 통합 검색
+- JANDI: Notion 5개 + KB 5개
+- 웹 필터: 전체 / Notion / KB
+- Notion 태그: 흰 배경 + 검은 글씨
+- KB 태그: Broadcom 빨강 + 흰 글씨
+- 태그 클릭 필터
+- AND `&` / OR `|`
 - 08:00 / 12:00 / 15:00 / 19:00 KST 자동 갱신
-
-## 5. 최초 Broadcom 인덱싱
-
-배포 후:
-`/api/broadcom/start?token=REINDEX_TOKEN`
-
-을 한 번 호출하면 됩니다.
-
-그 뒤 GitHub Actions의 5분 worker가 자동으로 `/api/broadcom/next`를 반복 호출해서 완료합니다.
-
-상태 확인:
-`/api/broadcom/status?token=REINDEX_TOKEN`

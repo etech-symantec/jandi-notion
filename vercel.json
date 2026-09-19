@@ -24,17 +24,8 @@
     "api/search.js": {
       "maxDuration": 30
     },
-    "api/broadcom/reindex.js": {
-      "maxDuration": 30
-    },
-    "api/broadcom/start.js": {
-      "maxDuration": 60
-    },
-    "api/broadcom/next.js": {
+    "api/broadcom.js": {
       "maxDuration": 300
-    },
-    "api/broadcom/status.js": {
-      "maxDuration": 60
     }
   },
   "rewrites": [
