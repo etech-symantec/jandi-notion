@@ -74,18 +74,13 @@ export default async function handler(req, res) {
       `${baseUrl}/search?q=${encodeURIComponent(query)}&perPage=10&page=1`;
 
     const parsed = parseBooleanQuery(query);
-    const mode = parsed.hasOperators ? "조건 검색" : "일반 검색";
+    const mode = getSearchMode(query, parsed);
 
     const lines = [
       "🔎 **Notion 검색 결과**",
       "",
-      "| 검색어 | 결과 | 방식 |",
-      "|---|---:|---|",
-      `| ${escapeMarkdown(query)} | ${total}건 | ${mode} |`,
-      "",
-      "| 인덱스 | 마지막 갱신 |",
-      "|---:|---|",
-      `| ${index.pageCount || index.pages?.length || 0}개 | ${formatDate(index.createdAt)} |`,
+      `🔍 ${escapeMarkdown(query)}   ·   ${total}건   ·   ${mode}`,
+      `📚 ${index.pageCount || index.pages?.length || 0}개   ·   🕒 ${formatCompactDate(index.createdAt)}`,
       ""
     ];
 
@@ -145,6 +140,42 @@ function getBaseUrl(req) {
     req.headers.host ||
     "jandi-notion-search.vercel.app";
   return `${proto}://${host}`;
+}
+
+
+function getSearchMode(query, parsed) {
+  const hasAnd = String(query || "").includes("&");
+  const hasOr = String(query || "").includes("|");
+
+  if (!parsed?.hasOperators) return "일반";
+  if (hasAnd && hasOr) return "AND·OR";
+  if (hasAnd) return "AND";
+  if (hasOr) return "OR";
+  return "조건";
+}
+
+function formatCompactDate(value) {
+  if (!value) return "-";
+
+  try {
+    const d = new Date(value);
+
+    const parts = new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(d);
+
+    const get = type =>
+      parts.find(p => p.type === type)?.value || "";
+
+    return `${get("month")}.${get("day")} ${get("hour")}:${get("minute")}`;
+  } catch {
+    return "-";
+  }
 }
 
 function jandi(res, body) {
