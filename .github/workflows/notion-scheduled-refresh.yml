@@ -120,6 +120,24 @@ jobs:
 
           echo "Started runId=${RUN_ID}, totalPages=${TOTAL}, batchSize=${BATCH}"
 
+      - name: Refresh Broadcom KB title index
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Refreshing Broadcom KB title index..."
+
+          RESULT="$(curl --fail --silent --show-error \
+            --max-time 290 \
+            "${BASE_URL}/api/broadcom/reindex?token=${REINDEX_TOKEN}")"
+
+          echo "$RESULT"
+
+          OK="$(echo "$RESULT" | jq -r '.ok // false')"
+          if [ "$OK" != "true" ]; then
+            echo "::warning::Broadcom KB refresh failed."
+          fi
+
       - name: Skip active reindex
         if: steps.decision.outputs.start != 'true'
         run: |
