@@ -1,52 +1,43 @@
-# JANDI → Notion + Broadcom KB 검색 v4.2
-## Vercel Hobby Serverless Function 제한 대응
+# JANDI → Notion + Broadcom KB 검색 v4.3
+## Broadcom 영어 KB만 인덱싱
 
-v4.1의 Broadcom API 4개를 1개로 통합했습니다.
+Broadcom Knowledge Base에서 영어 페이지 이외의 페이지를 제외합니다.
 
-기존:
-- api/broadcom/start.js
-- api/broadcom/next.js
-- api/broadcom/status.js
-- api/broadcom/reindex.js
+### 필터 방식
 
-v4.2:
-- api/broadcom.js
+1. sitemap URL 단계
+- 일본어/중국어/한국어/키릴 문자 등이 포함된 localized slug는 수집 대상에서 제외
 
-사용법:
+2. 실제 페이지 단계
+- `<html lang>` 또는 language meta가 있으면 `en` 계열만 허용
+- 제목에 일본어/중국어/한국어/키릴 문자가 있으면 제외
+- 퍼센트 인코딩 문자열이 제목으로 남아 있으면 제외
+- 본문 샘플에서 비라틴 문자가 과도하게 많으면 제외
 
-시작:
-`/api/broadcom?action=start&token=REINDEX_TOKEN`
+3. 기존 인덱스 정리
+- 이전 인덱스에서 재사용되는 레코드도 영어 여부 검사
+- 최종 Broadcom index를 합칠 때 영어 레코드만 저장
+- 따라서 기존 일본어/깨진 KB도 다음 전체 Broadcom 배치 완료 시 제거됨
 
-다음 배치:
-`/api/broadcom?action=next&token=REINDEX_TOKEN`
+## 배포 후 해야 할 일
 
-상태:
+Broadcom 배치 작업을 새로 시작:
+
+`/api/broadcom?action=start&token=REINDEX_TOKEN&force=true`
+
+이후 기존 GitHub Actions 5분 worker가 `next` 배치를 이어서 처리합니다.
+
+상태 확인:
+
 `/api/broadcom?action=status&token=REINDEX_TOKEN`
 
-GitHub Actions workflow도 새 URL을 사용하도록 수정되어 있습니다.
+`status=completed`가 되면 새 영어 전용 KB 인덱스로 교체됩니다.
 
-## 중요한 배포 주의
-
-GitHub 저장소에서 예전 API 파일이 남아 있으면 Vercel은 그대로 Serverless Function으로 계산합니다.
-
-특히 다음 경로가 남아 있으면 삭제하세요:
-
-- api/broadcom/start.js
-- api/broadcom/next.js
-- api/broadcom/status.js
-- api/broadcom/reindex.js
-- 과거 버전의 api/reindex/cron.js
-
-v4.2 ZIP으로 저장소를 완전히 맞춘 뒤 배포하는 것을 권장합니다.
-
-## 기능 유지
-
-- Broadcom 제목+본문 배치 인덱싱
-- Notion + Broadcom 통합 검색
-- JANDI: Notion 5개 + KB 5개
-- 웹 필터: 전체 / Notion / KB
-- Notion 태그: 흰 배경 + 검은 글씨
-- KB 태그: Broadcom 빨강 + 흰 글씨
+## 나머지 기능 유지
+- Notion 5개 + KB 5개 잔디 출력
+- [Notion] / [KB] 표시
+- Broadcom 본문 검색
+- 웹 전체/Notion/KB 필터
 - 태그 클릭 필터
-- AND `&` / OR `|`
-- 08:00 / 12:00 / 15:00 / 19:00 KST 자동 갱신
+- AND `&`, OR `|`
+- 자동 갱신
