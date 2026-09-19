@@ -1,0 +1,126 @@
+name: Notion Scheduled Full Refresh
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC.
+    # KST 08:00 = UTC 23:00 (previous day)
+    - cron: "0 23 * * *"
+    # KST 12:00 = UTC 03:00
+    - cron: "0 3 * * *"
+    # KST 15:00 = UTC 06:00
+    - cron: "0 6 * * *"
+    # KST 19:00 = UTC 10:00
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "진행 중인 작업이 있어도 새 인덱싱을 시작할지 여부"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notion-scheduled-refresh
+  cancel-in-progress: false
+
+jobs:
+  start-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      BASE_URL: https://jandi-notion-search.vercel.app
+      REINDEX_TOKEN: ${{ secrets.REINDEX_TOKEN }}
+
+    steps:
+      - name: Validate secret
+        shell: bash
+        run: |
+          if [ -z "$REINDEX_TOKEN" ]; then
+            echo "::error::GitHub repository secret REINDEX_TOKEN is not configured."
+            exit 1
+          fi
+
+      - name: Read current status
+        id: current
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATUS_JSON="$(curl --fail --silent --show-error \
+            --max-time 30 \
+            "${BASE_URL}/api/reindex/status?token=${REINDEX_TOKEN}")"
+
+          echo "$STATUS_JSON"
+
+          EXISTS="$(echo "$STATUS_JSON" | jq -r '.exists // false')"
+          STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
+          PROGRESS="$(echo "$STATUS_JSON" | jq -r '.progress // 0')"
+          PROCESSED="$(echo "$STATUS_JSON" | jq -r '.processedPages // 0')"
+          TOTAL="$(echo "$STATUS_JSON" | jq -r '.totalPages // 0')"
+
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          echo "Current: status=${STATUS:-none}, progress=${PROGRESS}%, processed=${PROCESSED}/${TOTAL}"
+
+      - name: Decide whether to start
+        id: decision
+        shell: bash
+        env:
+          CURRENT_STATUS: ${{ steps.current.outputs.status }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_INPUT: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          FORCE="false"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$FORCE_INPUT" = "true" ]; then
+            FORCE="true"
+          fi
+
+          if [ "$FORCE" = "true" ]; then
+            echo "start=true" >> "$GITHUB_OUTPUT"
+            echo "Manual force refresh requested."
+            exit 0
+          fi
+
+          if [ "$CURRENT_STATUS" = "running" ] || [ "$CURRENT_STATUS" = "paused" ]; then
+            echo "start=false" >> "$GITHUB_OUTPUT"
+            echo "A reindex job is already ${CURRENT_STATUS}; scheduled refresh will be skipped."
+          else
+            echo "start=true" >> "$GITHUB_OUTPUT"
+            echo "No active reindex job. Starting a new full refresh."
+          fi
+
+      - name: Start new full reindex
+        if: steps.decision.outputs.start == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RESULT="$(curl --fail --silent --show-error \
+            --max-time 115 \
+            "${BASE_URL}/api/reindex/start?token=${REINDEX_TOKEN}")"
+
+          echo "$RESULT"
+
+          OK="$(echo "$RESULT" | jq -r '.ok // false')"
+          if [ "$OK" != "true" ]; then
+            echo "::error::Failed to start scheduled full reindex."
+            exit 1
+          fi
+
+          TOTAL="$(echo "$RESULT" | jq -r '.totalPages // 0')"
+          BATCH="$(echo "$RESULT" | jq -r '.batchSize // 0')"
+          RUN_ID="$(echo "$RESULT" | jq -r '.runId // ""')"
+
+          echo "Started runId=${RUN_ID}, totalPages=${TOTAL}, batchSize=${BATCH}"
+
+      - name: Skip active reindex
+        if: steps.decision.outputs.start != 'true'
+        run: |
+          echo "Scheduled refresh skipped because an index build is already active."
