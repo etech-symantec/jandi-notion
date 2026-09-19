@@ -118,7 +118,8 @@ async function load(){
     `검색어: <strong>${esc(data.query)}</strong>`,
     `전체 결과: <strong>${data.total}건</strong>`,
     `현재 페이지: <strong>${data.page}/${data.totalPages||1}</strong>`,
-    `인덱스: <strong>${data.searchIndex?.pageCount??0}개</strong>`,
+    `Notion: <strong>${data.searchIndex?.pageCount??0}개</strong>`,
+    `Broadcom: <strong>${data.searchIndex?.broadcomPageCount??0}개</strong>`,
     `마지막 갱신: <strong>${esc(data.searchIndex?.createdAtKst||"-")}</strong>`
   ].map(v=>`<span>${v}</span>`).join("");
 
@@ -131,6 +132,7 @@ async function load(){
     const badges=[];
     if(item.titleMatch)badges.push("제목 일치");
     if(item.bodyMatch)badges.push("본문 일치");
+    badges.unshift(item.source === "Broadcom" ? "Broadcom KB" : "Notion");
     return `<article class="card">
       <div class="titleRow">
         <div class="rank">${item.rank}</div>

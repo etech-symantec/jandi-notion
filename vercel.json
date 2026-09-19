@@ -23,6 +23,9 @@
     },
     "api/search.js": {
       "maxDuration": 30
+    },
+    "api/broadcom/reindex.js": {
+      "maxDuration": 300
     }
   },
   "rewrites": [

@@ -1,12 +1,15 @@
 import {
   FINAL_INDEX_PATH,
+  BROADCOM_INDEX_PATH,
   clampNumber,
   formatDate
 } from "../lib/common.js";
 import { readJsonBlob } from "../lib/blob.js";
-import { searchIndex } from "../lib/search.js";
+import { searchIndex, parseBooleanQuery } from "../lib/search.js";
+import { searchBroadcomIndex } from "../lib/broadcom.js";
 
 let memoryCache = { loadedAt: 0, index: null };
+let broadcomCache = { loadedAt: 0, index: null };
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -39,7 +42,27 @@ export default async function handler(req, res) {
       });
     }
 
-    const all = searchIndex(index, q);
+    const notionResults = searchIndex(index, q).map(v => ({
+      ...v,
+      source: "Notion"
+    }));
+
+    const broadcomIndex = await loadBroadcomIndex();
+    const broadcomResults = broadcomIndex
+      ? searchBroadcomIndex(
+          broadcomIndex,
+          q,
+          parseBooleanQuery(q)
+        )
+      : [];
+
+    const all = [...notionResults, ...broadcomResults]
+      .sort((a, b) => {
+        if ((b.score || 0) !== (a.score || 0)) {
+          return (b.score || 0) - (a.score || 0);
+        }
+        return String(a.title).localeCompare(String(b.title), "ko");
+      });
     const total = all.length;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const safePage = Math.min(page, totalPages);
@@ -56,7 +79,9 @@ export default async function handler(req, res) {
       searchIndex: {
         pageCount: index.pageCount || index.pages?.length || 0,
         createdAt: index.createdAt,
-        createdAtKst: formatDate(index.createdAt)
+        createdAtKst: formatDate(index.createdAt),
+        broadcomPageCount: broadcomIndex?.pageCount || 0,
+        broadcomCreatedAt: broadcomIndex?.createdAt || null
       },
       results: pageResults.map((item, idx) => ({
         rank: start + idx + 1,
@@ -68,6 +93,8 @@ export default async function handler(req, res) {
         bodyMatch: !!item.bodyMatch,
         snippet: item.snippet || "",
         score: item.score,
+        source: item.source || "Notion",
+        articleId: item.articleId || "",
         matchedTerms: item.matchedTerms || [],
         booleanMatch: !!item.booleanMatch
       }))
@@ -92,4 +119,23 @@ async function loadIndex() {
 
   memoryCache = { loadedAt: Date.now(), index };
   return index;
+}
+
+
+async function loadBroadcomIndex() {
+  if (
+    broadcomCache.index &&
+    Date.now() - broadcomCache.loadedAt < 60_000
+  ) {
+    return broadcomCache.index;
+  }
+
+  try {
+    const index = await readJsonBlob(BROADCOM_INDEX_PATH, true);
+    if (!index) return null;
+    broadcomCache = { loadedAt: Date.now(), index };
+    return index;
+  } catch {
+    return null;
+  }
 }

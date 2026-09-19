@@ -1,5 +1,6 @@
 import {
   FINAL_INDEX_PATH,
+  BROADCOM_INDEX_PATH,
   clampNumber,
   escapeMarkdown,
   formatDate,
@@ -7,8 +8,10 @@ import {
 } from "../lib/common.js";
 import { readJsonBlob } from "../lib/blob.js";
 import { searchIndex, parseBooleanQuery } from "../lib/search.js";
+import { searchBroadcomIndex } from "../lib/broadcom.js";
 
 let memoryCache = { loadedAt: 0, index: null };
+let broadcomCache = { loadedAt: 0, index: null };
 
 export default async function handler(req, res) {
   const started = Date.now();
@@ -65,7 +68,24 @@ export default async function handler(req, res) {
     }
 
     const maxResults = clampNumber(process.env.MAX_RESULTS, 1, 10, 10);
-    const allResults = searchIndex(index, query);
+    const notionResults = searchIndex(index, query).map(v => ({
+      ...v,
+      source: "Notion"
+    }));
+
+    const broadcomIndex = await loadBroadcomIndex();
+    const parsedBoolean = parseBooleanQuery(query);
+    const broadcomResults = broadcomIndex
+      ? searchBroadcomIndex(broadcomIndex, query, parsedBoolean)
+      : [];
+
+    const allResults = [...notionResults, ...broadcomResults]
+      .sort((a, b) => {
+        if ((b.score || 0) !== (a.score || 0)) {
+          return (b.score || 0) - (a.score || 0);
+        }
+        return String(a.title).localeCompare(String(b.title), "ko");
+      });
     const results = allResults.slice(0, maxResults);
     const total = allResults.length;
 
@@ -80,7 +100,7 @@ export default async function handler(req, res) {
       "🔎 **Notion 검색 결과**",
       "",
       `🔍 ${escapeMarkdown(query)}   ·   ${total}건   ·   ${mode}`,
-      `📚 ${index.pageCount || index.pages?.length || 0}개   ·   🕒 ${formatCompactDate(index.createdAt)}`,
+      `📚 N ${index.pageCount || index.pages?.length || 0} · B ${broadcomIndex?.pageCount || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
       ""
     ];
 
@@ -89,7 +109,10 @@ export default async function handler(req, res) {
     } else {
       for (let i = 0; i < results.length; i++) {
         const item = results[i];
-        lines.push(`${i + 1}. [${escapeMarkdown(item.title)}](${item.url})`);
+        const sourceLabel = item.source === "Broadcom" ? "B" : "N";
+        lines.push(
+          `${i + 1}. [${escapeMarkdown(item.title)}](${item.url}) · ${sourceLabel}`
+        );
       }
     }
 
@@ -142,6 +165,30 @@ function getBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
+
+
+async function loadBroadcomIndex() {
+  if (
+    broadcomCache.index &&
+    Date.now() - broadcomCache.loadedAt < 60_000
+  ) {
+    return broadcomCache.index;
+  }
+
+  try {
+    const index = await readJsonBlob(BROADCOM_INDEX_PATH, true);
+    if (!index) return null;
+
+    broadcomCache = {
+      loadedAt: Date.now(),
+      index
+    };
+
+    return index;
+  } catch {
+    return null;
+  }
+}
 
 function getSearchMode(query, parsed) {
   const hasAnd = String(query || "").includes("&");

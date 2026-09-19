@@ -1,53 +1,46 @@
-# JANDI → Notion 검색 v3.8
+# JANDI → Notion + Broadcom KB 검색 v3.9
 
-## 자동 전체 갱신 시간
+## 검색 대상
+1. 기존 Notion 최종 인덱스
+2. `https://knowledge.broadcom.com/external/article/` Broadcom KB 제목 인덱스
 
-한국시간(KST) 기준 매일:
+예:
+`/노션 Licensing`
 
-- 08:00
-- 12:00
-- 15:00
-- 19:00
+검색 결과에는:
+- `· N` = Notion
+- `· B` = Broadcom KB
 
-에 GitHub Actions가 자동으로 새 전체 인덱싱을 시작합니다.
+가 붙습니다.
 
-GitHub Actions cron은 UTC 기준이므로 실제 workflow에는 다음과 같이 저장됩니다.
+## Broadcom 인덱스 생성
 
-- 08:00 KST → 23:00 UTC (전날)
-- 12:00 KST → 03:00 UTC
-- 15:00 KST → 06:00 UTC
-- 19:00 KST → 10:00 UTC
+수동:
+`/api/broadcom/reindex?token=REINDEX_TOKEN`
 
-## 동작 구조
+Broadcom 공개 sitemap에서 `external/article/` URL을 수집하고,
+URL slug를 제목으로 변환하여 가벼운 제목 인덱스를 생성합니다.
 
-1. 지정 시간에 `.github/workflows/notion-scheduled-refresh.yml` 실행
-2. 현재 `/api/reindex/status` 확인
-3. `completed` 또는 작업 없음 → `/api/reindex/start` 호출
-4. `running` 또는 `paused` → 기존 작업 보호를 위해 새 시작 생략
-5. 기존 `notion-reindex.yml` worker가 약 5분마다 다음 배치를 처리
-6. 모든 배치 완료 후 최종 `notion-index.json` 교체
+slug가 없는 일부 URL은 `BROADCOM_TITLE_FETCH_LIMIT` 개까지 실제 페이지를 읽어 제목을 보강합니다.
 
-## GitHub Secret
+## 자동 갱신
 
-Repository secret:
+기존 08:00 / 12:00 / 15:00 / 19:00 KST scheduled refresh workflow에서
+Notion 전체 갱신 시작과 함께 Broadcom KB 제목 인덱스도 갱신합니다.
 
-`REINDEX_TOKEN`
+## AND / OR
+기존과 동일:
+- `&` = AND
+- `|` = OR
 
-은 Vercel의 `REINDEX_TOKEN`과 동일해야 합니다.
-
-## 수동 강제 실행
-
-GitHub:
-
-Actions → Notion Scheduled Full Refresh → Run workflow
-
-에서 `force=true`를 선택하면 진행 중 상태와 관계없이 새 인덱싱 시작 요청을 보낼 수 있습니다.
-
-일반 운영에서는 force 사용을 권장하지 않습니다.
+Notion + Broadcom 양쪽에 동일한 조건을 적용합니다.
 
 ## 주의
+Broadcom의 sitemap 구조가 변경되거나 일부 KB가 sitemap에 포함되지 않을 수 있습니다.
+그 경우 `BROADCOM_EXTRA_URLS`에 특정 KB URL을 추가할 수 있습니다.
 
-GitHub Actions의 scheduled workflow는 지정 시각에 실행되도록 예약되지만,
-GitHub 부하 상황에 따라 실제 시작이 몇 분 지연될 수 있습니다.
+예:
+`BROADCOM_EXTRA_URLS=https://knowledge.broadcom.com/external/article/168282/error-message-licensing-license-key-not.html`
 
-기존 447페이지 최종 인덱스와 검색 기능은 그대로 유지됩니다.
+기존 Notion 인덱스는 재생성할 필요가 없습니다.
+Broadcom 인덱스만 최초 1회 생성하면 즉시 통합 검색됩니다.
