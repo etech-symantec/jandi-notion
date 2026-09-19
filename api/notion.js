@@ -18,9 +18,16 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v3.1 Chunked",
+      service: "JANDI Notion Search v3.4",
       endpoint: "/api/notion",
-      reindexUi: "/reindex"
+      searchPage: "/search",
+      features: [
+        "잔디 기본 목록 10개",
+        "전체 검색 건수",
+        "전체 결과 웹페이지",
+        "웹 검색어 강조",
+        "웹 페이지당 10/20개"
+      ]
     });
   }
 
@@ -58,8 +65,10 @@ export default async function handler(req, res) {
       );
     }
 
-    const maxResults = clampNumber(process.env.MAX_RESULTS, 1, 10, 5);
-    const results = searchIndex(index, query).slice(0, maxResults);
+    const maxResults = clampNumber(process.env.MAX_RESULTS, 1, 10, 10);
+    const allResults = searchIndex(index, query);
+    const results = allResults.slice(0, maxResults);
+    const total = allResults.length;
 
     if (!results.length) {
       return jandi(
@@ -67,19 +76,25 @@ export default async function handler(req, res) {
         [
           "🔎 **Notion 검색 결과**",
           "",
-          `\`${escapeMarkdown(query)}\`에 대한 결과가 없습니다.`,
+          `검색어: **${escapeMarkdown(query)}**`,
+          "전체 결과: **0건**",
           "",
-          `인덱스 페이지: ${index.pageCount || index.pages?.length || 0}개`,
-          `마지막 갱신: ${formatDate(index.createdAt)}`
+          `📚 인덱스: ${index.pageCount || index.pages?.length || 0}개`,
+          `🕒 마지막 갱신: ${formatDate(index.createdAt)}`
         ].join("\n")
       );
     }
+
+    const baseUrl = getBaseUrl(req);
+    const searchUrl =
+      `${baseUrl}/search?q=${encodeURIComponent(query)}&perPage=10&page=1`;
 
     const lines = [
       "🔎 **Notion 검색 결과**",
       "",
       `검색어: **${escapeMarkdown(query)}**`,
-      `결과: ${results.length}건`,
+      `전체 결과: **${total}건**`,
+      `표시: **상위 ${results.length}건**`,
       `검색시간: ${Date.now() - started}ms`,
       ""
     ];
@@ -89,31 +104,53 @@ export default async function handler(req, res) {
     for (let i = 0; i < results.length; i++) {
       const item = results[i];
       const badges = [];
+
       if (item.titleMatch) badges.push("제목");
       if (item.bodyMatch) badges.push("본문");
-      const badge = badges.length ? ` [${badges.join("+")}]` : "";
+
+      const badgeText = badges.length ? ` [${badges.join("+")}]` : "";
+      const preview = item.snippet
+        ? highlightMarkdown(
+            truncate(normalizeSpace(item.snippet), 160),
+            query
+          )
+        : "";
 
       lines.push(
-        `${i + 1}. [${escapeMarkdown(item.title)}](${item.url})${badge}`
+        `${i + 1}. [${escapeMarkdown(item.title)}](${item.url})${badgeText}`
       );
 
-      connectInfo.push({
-        title: `${i + 1}. ${item.title}${badge}`,
-        description: [
-          item.snippet ? truncate(item.snippet, 350) : "",
-          item.lastEdited ? `최근 수정: ${formatDate(item.lastEdited)}` : "",
-          item.url
-        ].filter(Boolean).join("\n")
-      });
+      if (preview) {
+        lines.push(`   └ ${preview}`);
+      }
+
+      if (i < 5) {
+        connectInfo.push({
+          title: `${i + 1}. ${item.title}${badgeText}`,
+          description: [
+            preview ? truncate(preview, 320) : "",
+            item.lastEdited
+              ? `최근 수정: ${formatDate(item.lastEdited)}`
+              : "",
+            item.url
+          ].filter(Boolean).join("\n\n")
+        });
+      }
     }
 
     lines.push("");
-    lines.push(`인덱스: ${index.pageCount || index.pages?.length || 0}개`);
-    lines.push(`마지막 갱신: ${formatDate(index.createdAt)}`);
+    if (total > results.length) {
+      lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
+    } else {
+      lines.push(`🌐 [웹에서 보기](${searchUrl})`);
+    }
+    lines.push("");
+    lines.push(`📚 인덱스: ${index.pageCount || index.pages?.length || 0}개`);
+    lines.push(`🕒 마지막 갱신: ${formatDate(index.createdAt)}`);
 
     return res.status(200).json({
       body: truncate(lines.join("\n"), 4500),
-      connectColor: "#000000",
+      connectColor: "#2563EB",
       connectInfo
     });
 
@@ -127,10 +164,7 @@ export default async function handler(req, res) {
 }
 
 async function loadIndex() {
-  if (
-    memoryCache.index &&
-    Date.now() - memoryCache.loadedAt < 60_000
-  ) {
+  if (memoryCache.index && Date.now() - memoryCache.loadedAt < 60_000) {
     return memoryCache.index;
   }
 
@@ -146,9 +180,18 @@ async function loadIndex() {
   }
 }
 
+function getBaseUrl(req) {
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const host =
+    req.headers["x-forwarded-host"] ||
+    req.headers.host ||
+    "jandi-notion-search.vercel.app";
+  return `${proto}://${host}`;
+}
+
 function jandi(res, body) {
   return res.status(200).json({
     body: truncate(body, 4500),
-    connectColor: "#000000"
+    connectColor: "#2563EB"
   });
 }

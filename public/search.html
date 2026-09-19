@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Notion 검색 결과</title>
+<style>
+:root{--bg:#0f172a;--panel:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--accent:#60a5fa;--accent2:#2563eb;--mark:#fde68a;--markText:#422006}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(180deg,#0b1220 0%,var(--bg) 100%);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:30px 20px 60px}
+.hero{background:rgba(17,24,39,.94);border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:0 16px 40px rgba(0,0,0,.22)}
+h1{margin:0 0 18px;font-size:26px}
+.searchbar{display:flex;gap:10px}
+input{flex:1;min-width:0;padding:13px 15px;background:#0b1220;border:1px solid #475569;border-radius:10px;color:#fff;font-size:16px;outline:none}
+input:focus{border-color:var(--accent)}
+button,select{border:0;border-radius:10px;padding:0 16px;font-weight:700;cursor:pointer}
+button{background:var(--accent2);color:#fff}
+select{background:#334155;color:#fff}
+.meta{margin-top:18px;display:flex;flex-wrap:wrap;gap:12px 20px;color:var(--muted);font-size:14px}
+.results{margin-top:20px}
+.card{background:rgba(17,24,39,.96);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:12px;transition:.15s ease}
+.card:hover{transform:translateY(-1px);border-color:#475569}
+.titleRow{display:flex;align-items:flex-start;gap:12px}
+.rank{min-width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:#1e3a8a;border-radius:9px;font-weight:800}
+.title{margin:1px 0 7px;font-size:18px;line-height:1.45}
+.title a{color:#bfdbfe;text-decoration:none}.title a:hover{text-decoration:underline}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.badge{padding:3px 8px;border-radius:999px;background:#1e293b;color:#cbd5e1;font-size:12px;border:1px solid #334155}
+.snippet{color:#d1d5db;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+mark{background:var(--mark);color:var(--markText);padding:0 2px;border-radius:3px;font-weight:800}
+.footerMeta{margin-top:12px;padding-top:11px;border-top:1px dashed #334155;color:var(--muted);font-size:13px;display:flex;gap:16px;flex-wrap:wrap}
+.pagination{display:flex;justify-content:center;align-items:center;gap:7px;margin-top:24px;flex-wrap:wrap}
+.pageBtn{min-width:40px;height:40px;padding:0 11px;background:#1f2937;color:#e5e7eb;border:1px solid #374151}
+.pageBtn.active{background:#2563eb;border-color:#3b82f6}.pageBtn:disabled{opacity:.4;cursor:not-allowed}
+.empty,.loading{text-align:center;padding:50px 20px;color:var(--muted);background:#111827;border:1px solid var(--line);border-radius:14px}
+@media(max-width:680px){.searchbar{flex-wrap:wrap}.searchbar input{flex-basis:100%}button,select{height:42px}.wrap{padding:18px 12px 40px}.hero{padding:17px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <h1>🔎 Notion 전체 검색</h1>
+    <div class="searchbar">
+      <input id="q" placeholder="검색어를 입력하세요">
+      <select id="perPage">
+        <option value="10">10개씩</option>
+        <option value="20">20개씩</option>
+      </select>
+      <button id="searchBtn">검색</button>
+    </div>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div class="results" id="results"></div>
+  <div class="pagination" id="pagination"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+let current={q:"",page:1,perPage:10};
+
+function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
+function escRegExp(s){return String(s).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}
+function highlight(text,query){
+  let out=esc(text||"");
+  const terms=[...new Set([query,...String(query||"").split(/\s+/)].map(v=>v.trim()).filter(v=>v.length>=2).sort((a,b)=>b.length-a.length))];
+  if(!terms.length)return out;
+  const pattern=terms.map(escRegExp).join("|");
+  return out.replace(new RegExp(`(${pattern})`,"gi"),"<mark>$1</mark>");
+}
+function setUrl(){
+  const url=new URL(location.href);
+  url.searchParams.set("q",current.q);
+  url.searchParams.set("page",current.page);
+  url.searchParams.set("perPage",current.perPage);
+  history.replaceState(null,"",url);
+}
+async function load(){
+  if(!current.q.trim()){
+    $("results").innerHTML='<div class="empty">검색어를 입력해주세요.</div>';
+    $("pagination").innerHTML="";$("meta").textContent="";return;
+  }
+  $("results").innerHTML='<div class="loading">검색 중...</div>';
+  $("pagination").innerHTML="";
+  setUrl();
+  const api=`/api/search?q=${encodeURIComponent(current.q)}&page=${current.page}&perPage=${current.perPage}`;
+  const r=await fetch(api,{cache:"no-store"});
+  const data=await r.json();
+  if(!r.ok||!data.ok){
+    $("results").innerHTML=`<div class="empty">검색 오류: ${esc(data.error||"알 수 없는 오류")}</div>`;return;
+  }
+  current.page=data.page;current.perPage=data.perPage;
+  $("meta").innerHTML=[
+    `검색어: <strong>${esc(data.query)}</strong>`,
+    `전체 결과: <strong>${data.total}건</strong>`,
+    `현재 페이지: <strong>${data.page}/${data.totalPages||1}</strong>`,
+    `인덱스: <strong>${data.searchIndex?.pageCount??0}개</strong>`,
+    `마지막 갱신: <strong>${esc(data.searchIndex?.createdAtKst||"-")}</strong>`
+  ].map(v=>`<span>${v}</span>`).join("");
+
+  if(!data.results.length){
+    $("results").innerHTML='<div class="empty">검색 결과가 없습니다.</div>';
+    renderPagination(data);return;
+  }
+
+  $("results").innerHTML=data.results.map(item=>{
+    const badges=[];
+    if(item.titleMatch)badges.push("제목 일치");
+    if(item.bodyMatch)badges.push("본문 일치");
+    return `<article class="card">
+      <div class="titleRow">
+        <div class="rank">${item.rank}</div>
+        <div style="flex:1;min-width:0">
+          <div class="title"><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${highlight(item.title,data.query)}</a></div>
+          <div class="badges">${badges.map(v=>`<span class="badge">${esc(v)}</span>`).join("")}</div>
+          <div class="snippet">${highlight(item.snippet||"",data.query)}</div>
+          <div class="footerMeta"><span>최근 수정: ${esc(formatDate(item.lastEdited))}</span></div>
+        </div>
+      </div>
+    </article>`;
+  }).join("");
+  renderPagination(data);
+}
+function formatDate(v){
+  if(!v)return "-";
+  try{return new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}).format(new Date(v))}
+  catch{return v}
+}
+function renderPagination(data){
+  const totalPages=data.totalPages||1;
+  if(totalPages<=1){$("pagination").innerHTML="";return}
+  const buttons=[];
+  buttons.push(`<button class="pageBtn" data-page="${Math.max(1,data.page-1)}" ${data.page<=1?"disabled":""}>‹</button>`);
+  let start=Math.max(1,data.page-3),end=Math.min(totalPages,start+6);start=Math.max(1,end-6);
+  if(start>1){buttons.push(`<button class="pageBtn" data-page="1">1</button>`);if(start>2)buttons.push("<span>…</span>")}
+  for(let p=start;p<=end;p++)buttons.push(`<button class="pageBtn ${p===data.page?"active":""}" data-page="${p}">${p}</button>`);
+  if(end<totalPages){if(end<totalPages-1)buttons.push("<span>…</span>");buttons.push(`<button class="pageBtn" data-page="${totalPages}">${totalPages}</button>`)}
+  buttons.push(`<button class="pageBtn" data-page="${Math.min(totalPages,data.page+1)}" ${data.page>=totalPages?"disabled":""}>›</button>`);
+  $("pagination").innerHTML=buttons.join("");
+  document.querySelectorAll("[data-page]").forEach(btn=>btn.addEventListener("click",()=>{
+    if(btn.disabled)return;
+    current.page=Number(btn.dataset.page);load();window.scrollTo({top:0,behavior:"smooth"});
+  }));
+}
+function startSearch(){current.q=$("q").value.trim();current.perPage=Number($("perPage").value)===20?20:10;current.page=1;load()}
+$("searchBtn").onclick=startSearch;
+$("q").addEventListener("keydown",e=>{if(e.key==="Enter")startSearch()});
+$("perPage").addEventListener("change",()=>{current.perPage=Number($("perPage").value)===20?20:10;current.page=1;load()});
+const params=new URLSearchParams(location.search);
+current.q=params.get("q")||"";
+current.page=Math.max(1,Number(params.get("page")||1));
+current.perPage=Number(params.get("perPage"))===20?20:10;
+$("q").value=current.q;$("perPage").value=String(current.perPage);
+load();
+</script>
+</body>
+</html>
