@@ -93,3 +93,30 @@ jobs:
           else
             echo "No batch required. Current status: $STATUS"
           fi
+
+
+      - name: Check Broadcom reindex status
+        id: broadcom_status
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATUS_JSON="$(curl --fail --silent --show-error --max-time 30 \
+            "${BASE_URL}/api/broadcom/status?token=${REINDEX_TOKEN}")"
+
+          echo "$STATUS_JSON"
+
+          STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
+          EXISTS="$(echo "$STATUS_JSON" | jq -r '.exists // false')"
+
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Process next Broadcom batch
+        if: steps.broadcom_status.outputs.exists == 'true' && steps.broadcom_status.outputs.status == 'running'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error --max-time 290 \
+            "${BASE_URL}/api/broadcom/next?token=${REINDEX_TOKEN}"
