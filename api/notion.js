@@ -79,9 +79,13 @@ export default async function handler(req, res) {
     const lines = [
       "🔎 **Notion 검색 결과**",
       "",
-      `검색어: **${escapeMarkdown(query)}**`,
-      `전체 결과: **${total}건**`,
-      `검색 방식: ${mode}`,
+      "| 검색어 | 결과 | 방식 |",
+      "|---|---:|---|",
+      `| ${escapeMarkdown(query)} | ${total}건 | ${mode} |`,
+      "",
+      "| 인덱스 | 마지막 갱신 |",
+      "|---:|---|",
+      `| ${index.pageCount || index.pages?.length || 0}개 | ${formatDate(index.createdAt)} |`,
       ""
     ];
 
@@ -94,18 +98,14 @@ export default async function handler(req, res) {
       }
     }
 
-    lines.push("");
-
-    if (total > results.length) {
-      lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
-    } else if (total > 0) {
-      lines.push(`🌐 [웹에서 결과 보기](${searchUrl})`);
+    if (total > 0) {
+      lines.push("");
+      if (total > results.length) {
+        lines.push(`🌐 [전체 결과 ${total}건 보기](${searchUrl})`);
+      } else {
+        lines.push(`🌐 [웹에서 보기](${searchUrl})`);
+      }
     }
-
-    lines.push("");
-    lines.push(`📚 인덱스: ${index.pageCount || index.pages?.length || 0}개`);
-    lines.push(`🕒 마지막 갱신: ${formatDate(index.createdAt)}`);
-    lines.push(`⏱ 검색시간: ${Date.now() - started}ms`);
 
     return res.status(200).json({
       body: truncate(lines.join("\n"), 4500),
