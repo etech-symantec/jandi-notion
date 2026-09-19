@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v3.5",
+      service: "JANDI Notion Search v4.0",
       endpoint: "/api/notion",
       searchPage: "/search",
       syntax: { and: "&", or: "|", precedence: "& before |" }
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
       "🔎 **Notion 검색 결과**",
       "",
       `🔍 ${escapeMarkdown(query)}   ·   ${total}건   ·   ${mode}`,
-      `📚 N ${index.pageCount || index.pages?.length || 0} · B ${broadcomIndex?.pageCount || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
+      `📚 Notion ${index.pageCount || index.pages?.length || 0} · KB ${broadcomIndex?.pageCount || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
       ""
     ];
 
@@ -109,9 +109,11 @@ export default async function handler(req, res) {
     } else {
       for (let i = 0; i < results.length; i++) {
         const item = results[i];
-        const sourceLabel = item.source === "Broadcom" ? "B" : "N";
+        const sourceLabel =
+          item.source === "Broadcom" ? "[KB]" : "[Notion]";
+
         lines.push(
-          `${i + 1}. [${escapeMarkdown(item.title)}](${item.url}) · ${sourceLabel}`
+          `${i + 1}. ${sourceLabel} [${escapeMarkdown(item.title)}](${item.url})`
         );
       }
     }

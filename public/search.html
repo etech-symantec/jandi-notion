@@ -132,7 +132,7 @@ async function load(){
     const badges=[];
     if(item.titleMatch)badges.push("제목 일치");
     if(item.bodyMatch)badges.push("본문 일치");
-    badges.unshift(item.source === "Broadcom" ? "Broadcom KB" : "Notion");
+    badges.unshift(item.source === "Broadcom" ? "KB" : "Notion");
     return `<article class="card">
       <div class="titleRow">
         <div class="rank">${item.rank}</div>
