@@ -1,62 +1,40 @@
-# JANDI → Notion + Broadcom KB 검색 v4.9
-## 실제 Broadcom 페이지 기준 영어 판별
+# JANDI → Notion + Broadcom KB 검색 v4.10
+## GitHub worker 10회 연속 처리
 
-v4.8까지는 일부 경우 URL slug가 영어처럼 보이면 실제 페이지를 열지 않고
-영어 제목으로 인정할 수 있었습니다.
+Broadcom rebuild가 active일 때 GitHub의 5분 worker 한 번이
+`/api/broadcom?action=next`를 최대 10회 연속 호출합니다.
 
-Broadcom은 URL이나 `<html lang="en">`이 영어처럼 보여도 실제 페이지가
-일본어일 수 있으므로 v4.9에서는 URL과 HTML lang을 영어 판정의 positive
-signal로 사용하지 않습니다.
+기본 제목 설정:
+- BROADCOM_TITLE_RUNTIME_BATCH_SIZE=20
+- 1회 next = 실제 Broadcom 페이지 최대 20개 검사
+- worker 1회 = 최대 10 next
+- 즉 최대 200페이지/worker
 
-## v4.9 title rebuild 방식
+## 예상 속도
 
-모든 article URL마다 실제 Broadcom 페이지를 fetch합니다.
+180,477 / 200 ≈ 903회 worker
 
-판정 순서:
+5분마다 실행된다고 가정하면 약 3.1일 수준입니다.
+실제 GitHub scheduled workflow 지연과 페이지 응답 속도에 따라 더 길어질 수 있습니다.
 
-1. 실제 H1/H2/H3/og:title/title에서 제목 추출
-2. 제목에 일본어/중국어/한글/Cyrillic 문자가 하나라도 있으면 제외
-3. 실제 article/main/content 본문 최대 8,000자를 추출
-4. 본문의 Latin 문자와 localized script 비율 계산
-5. localized 문자가 과도하면 제외
-6. 영어로 판정된 실제 페이지의 제목만 title index에 저장
+## 안정성
 
-`<html lang="en">`은 영어 여부 판정에 사용하지 않습니다.
-
-## 속도/timeout 안전 설정
-
-실제 페이지를 모두 열기 때문에 batch를 낮췄습니다.
-
-BROADCOM_TITLE_RUNTIME_BATCH_SIZE=20
-BROADCOM_TITLE_CONCURRENCY=5
-
-즉 GitHub worker 1회당 기본 20개 실제 페이지를 검사합니다.
+각 next 호출:
+- curl max-time 260초
+- timeout 또는 HTTP 오류가 발생하면 해당 worker의 반복을 즉시 중단
+- 다음 scheduled worker가 이어서 계속 처리
+- 각 호출 사이 1초 대기
 
 ## 배포 후
 
-이전 title chunk를 재사용하지 않도록 반드시 다시 reset:
+현재 진행 중인 Broadcom rebuild를 reset할 필요 없습니다.
 
-`/api/broadcom?action=reset&token=REINDEX_TOKEN`
+v4.10 배포 후 다음 GitHub worker부터 현재 processedPages 위치에서
+한 번에 최대 10개 batch를 연속 처리합니다.
 
-상태:
+예:
+processedPages 20
+→ 다음 worker 성공 시 최대 220
+→ 그다음 최대 420 ...
 
-`/api/broadcom?action=status&token=REINDEX_TOKEN`
-
-첫 worker 성공 후 예:
-
-- processedPages: 20
-- englishPages: 실제 영어 판정 수
-- skippedNonEnglish: 실제 일본어/중국어 등 제외 수
-- failedPages: fetch 실패 수
-
-이제 `englishPages == processedPages`가 계속 나오는 것이 당연한 구조가 아니며,
-실제 localized 페이지가 발견되면 `skippedNonEnglish`가 증가합니다.
-
-## 완전 초기화 유지
-
-reset 시 body는:
-- status = waiting_for_title
-- indexedPages = 0
-- chunkCount = 0
-
-새 영어 title index가 완성되면 body rebuild가 자동 시작됩니다.
+실제 localized 페이지는 계속 `skippedNonEnglish`로 제외됩니다.
