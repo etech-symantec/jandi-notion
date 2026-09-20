@@ -1,27 +1,99 @@
-# JANDI → Notion + Broadcom KB 검색 v4.5
+# JANDI → Notion + Broadcom KB 검색 v4.6
+## 180,000+ Broadcom KB 대응 구조
 
-## GitHub Actions timeout 안정화
+Broadcom 제목 인덱스와 본문 인덱스를 분리했습니다.
 
-증상:
-- `Process next batch`
-- `curl: (28) Operation timed out after 290002 milliseconds`
-- 약 5분 후 GitHub worker 실패
+### 제목 인덱스
+기존:
+`jandi-notion/broadcom-index.json`
 
-원인:
-기존 Notion reindex state에 `batchSize=15`가 저장된 상태에서
-한 번의 `/api/reindex/next` 요청이 너무 오래 걸려 Vercel Hobby의
-300초 함수 제한에 가까워진 경우입니다.
+을 그대로 사용합니다.
 
-## 수정
+현재 약 180,477개 제목이 들어 있어도 v4.6에서 절대
+10,000개짜리 본문 인덱스로 덮어쓰지 않습니다.
 
-- 기존 state의 batchSize가 15여도 실제 한 요청에서는 최대 5페이지만 처리
-- 기본값: `REINDEX_RUNTIME_BATCH_SIZE=5`
-- GitHub curl timeout: 260초
-- timeout이나 일시적인 HTTP 오류는 warning 처리
-- 다음 scheduled worker가 이어서 재시도
+따라서 Broadcom 본문 구축이 오래 걸려도 제목 검색은 처음부터
+기존 전체 KB를 계속 검색합니다.
 
-중요:
-현재 진행 중인 Notion reindex를 취소하거나 새로 시작할 필요가 없습니다.
-v4.5 배포 후 다음 worker부터 현재 `nextIndex` 위치에서 계속 진행됩니다.
+### 본문 인덱스
 
-기존 기능은 그대로 유지됩니다.
+본문은 별도 gzip chunk로 저장됩니다.
+
+경로:
+`jandi-notion/broadcom-body/chunks/chunk-xxxxx.json.gz`
+
+기본:
+- chunk당 250개 문서
+- 문서당 본문 최대 4,000자
+- gzip 압축
+- 영어 문서만 저장
+
+각 chunk에는 별도 Bloom filter를 만들어 manifest에 저장합니다.
+
+검색 시 전체 본문 chunk를 읽지 않고 검색어가 존재할 가능성이 있는
+chunk만 골라서 읽습니다.
+
+manifest:
+`jandi-notion/broadcom-body/manifest.json`
+
+## 최초 시작
+
+배포 후:
+
+`/api/broadcom?action=start&token=REINDEX_TOKEN&force=true`
+
+상태:
+
+`/api/broadcom?action=status&token=REINDEX_TOKEN`
+
+GitHub 5분 worker가 기존과 같이:
+
+`/api/broadcom?action=next&token=REINDEX_TOKEN`
+
+를 호출하면서 진행합니다.
+
+## 상태 예
+
+- titleIndex.pageCount = 180477
+- bodyIndex.indexedPages = 현재까지 본문 저장 완료된 영어 KB 수
+- processedPages = 제목 인덱스에서 검사 완료한 위치
+- progress = 전체 본문 구축 진행률
+
+본문 구축 중에도 제목 인덱스 180,477개는 계속 사용됩니다.
+
+## 검색
+
+검색 순서:
+1. Notion 제목+본문
+2. Broadcom 제목 전체 인덱스
+3. Broadcom 본문 Bloom filter로 후보 chunk 선택
+4. 후보 body chunk 검색
+5. URL 기준 중복 제거/결과 병합
+
+잔디:
+- Notion 최대 5개
+- KB 최대 5개
+
+웹:
+- 전체 / Notion / KB 필터
+- Notion 흰색 태그
+- KB Broadcom 빨간 태그
+- 태그 클릭 필터
+
+## 권장 기본값
+
+BROADCOM_BODY_MAX_PAGES=250000
+BROADCOM_BODY_FETCH_BATCH=50
+BROADCOM_BODY_CONCURRENCY=5
+BROADCOM_BODY_CHUNK_SIZE=250
+BROADCOM_BODY_MAX_CHARS=4000
+BROADCOM_BODY_REFRESH_AGE_DAYS=30
+BROADCOM_BODY_SEARCH_MAX_CHUNKS=40
+
+## 주의
+
+18만 개 페이지의 최초 본문 수집은 무료 Vercel에서는 상당한 시간이 걸립니다.
+하지만 v4.6에서는 그동안에도 기존 18만 개 제목 검색이 정상 동작하고,
+수집 완료된 본문 chunk는 즉시 검색에 반영됩니다.
+
+기존 `broadcom-index.json`은 삭제하지 마세요.

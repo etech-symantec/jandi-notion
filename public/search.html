@@ -138,6 +138,7 @@ async function load(){
     `검색 결과: <strong>${data.total}건</strong>`,
     `Notion 일치: <strong>${data.sourceCounts?.notion??0}건</strong>`,
     `KB 일치: <strong>${data.sourceCounts?.kb??0}건</strong>`,
+    `KB 본문: <strong>${data.searchIndex?.broadcomBodyIndexedPages??0}개 인덱싱</strong>`,
     `마지막 갱신: <strong>${esc(data.searchIndex?.createdAtKst||"-")}</strong>`
   ].map(v=>`<span>${v}</span>`).join("");
 

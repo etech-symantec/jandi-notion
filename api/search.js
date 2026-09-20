@@ -7,6 +7,7 @@ import {
 import { readJsonBlob } from "../lib/blob.js";
 import { searchIndex, parseBooleanQuery } from "../lib/search.js";
 import { searchBroadcomIndex } from "../lib/broadcom.js";
+import { readBodyManifest, searchBroadcomBodies, mergeTitleAndBodyResults } from "../lib/broadcom-body.js";
 
 let memoryCache = { loadedAt: 0, index: null };
 let broadcomCache = { loadedAt: 0, index: null };
@@ -49,13 +50,30 @@ export default async function handler(req, res) {
     }));
 
     const broadcomIndex = await loadBroadcomIndex();
-    const broadcomResults = broadcomIndex
+    const parsedBroadcom = parseBooleanQuery(q);
+
+    const broadcomTitleResults = broadcomIndex
       ? searchBroadcomIndex(
           broadcomIndex,
           q,
-          parseBooleanQuery(q)
+          parsedBroadcom
         )
       : [];
+
+    const bodyManifest = await readBodyManifest();
+
+    const broadcomBodyResults = bodyManifest
+      ? await searchBroadcomBodies(
+          bodyManifest,
+          q,
+          parsedBroadcom
+        )
+      : [];
+
+    const broadcomResults = mergeTitleAndBodyResults(
+      broadcomTitleResults,
+      broadcomBodyResults
+    );
 
     const merged = [...notionResults, ...broadcomResults]
       .sort((a, b) => {
@@ -98,7 +116,9 @@ export default async function handler(req, res) {
         createdAt: index.createdAt,
         createdAtKst: formatDate(index.createdAt),
         broadcomPageCount: broadcomIndex?.pageCount || 0,
-        broadcomCreatedAt: broadcomIndex?.createdAt || null
+        broadcomCreatedAt: broadcomIndex?.createdAt || null,
+        broadcomBodyIndexedPages: bodyManifest?.indexedPages || 0,
+        broadcomBodyChunkCount: Object.keys(bodyManifest?.chunks || {}).length
       },
       results: pageResults.map((item, idx) => ({
         rank: start + idx + 1,

@@ -9,6 +9,7 @@ import {
 import { readJsonBlob } from "../lib/blob.js";
 import { searchIndex, parseBooleanQuery } from "../lib/search.js";
 import { searchBroadcomIndex } from "../lib/broadcom.js";
+import { readBodyManifest, searchBroadcomBodies, mergeTitleAndBodyResults } from "../lib/broadcom-body.js";
 
 let memoryCache = { loadedAt: 0, index: null };
 let broadcomCache = { loadedAt: 0, index: null };
@@ -19,7 +20,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v4.5",
+      service: "JANDI Notion Search v4.6",
       endpoint: "/api/notion",
       searchPage: "/search",
       syntax: { and: "&", or: "|", precedence: "& before |" }
@@ -75,9 +76,29 @@ export default async function handler(req, res) {
 
     const broadcomIndex = await loadBroadcomIndex();
     const parsedBoolean = parseBooleanQuery(query);
-    const broadcomResults = broadcomIndex
-      ? searchBroadcomIndex(broadcomIndex, query, parsedBoolean)
+
+    const broadcomTitleResults = broadcomIndex
+      ? searchBroadcomIndex(
+          broadcomIndex,
+          query,
+          parsedBoolean
+        )
       : [];
+
+    const bodyManifest = await readBodyManifest();
+
+    const broadcomBodyResults = bodyManifest
+      ? await searchBroadcomBodies(
+          bodyManifest,
+          query,
+          parsedBoolean
+        )
+      : [];
+
+    const broadcomResults = mergeTitleAndBodyResults(
+      broadcomTitleResults,
+      broadcomBodyResults
+    );
 
     const notionTop = notionResults.slice(0, 5);
     const kbTop = broadcomResults.slice(0, 5);
@@ -97,7 +118,7 @@ export default async function handler(req, res) {
       "🔎 **Notion 검색 결과**",
       "",
       `🔍 ${escapeMarkdown(query)}   ·   총 ${total}건   ·   ${mode}`,
-      `📚 Notion ${index.pageCount || index.pages?.length || 0} · KB ${broadcomIndex?.pageCount || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
+      `📚 Notion ${index.pageCount || index.pages?.length || 0} · KB ${broadcomIndex?.pageCount || 0} · 본문 ${bodyManifest?.indexedPages || 0}   ·   🕒 ${formatCompactDate(index.createdAt)}`,
       ""
     ];
 
