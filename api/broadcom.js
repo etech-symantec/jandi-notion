@@ -326,7 +326,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       service:
-        "Broadcom Local Bootstrap + Daily Incremental v4.11",
+        "Broadcom Local Bootstrap + Daily Incremental v4.12",
       usage: {
         reset:
           "/api/broadcom?action=reset&token=REINDEX_TOKEN",
