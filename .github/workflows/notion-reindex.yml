@@ -109,31 +109,53 @@ jobs:
         if: steps.broadcom_status.outputs.phase == 'title' || steps.broadcom_status.outputs.phase == 'body'
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          HTTP_CODE="$(curl --silent --show-error \
-            --max-time 260 \
-            --output /tmp/broadcom-next.json \
-            --write-out "%{http_code}" \
-            "${BASE_URL}/api/broadcom?action=next&token=${REINDEX_TOKEN}")"
-          CURL_EXIT=$?
+          echo "Broadcom rebuild active. Processing up to 10 batches..."
 
-          if [ -f /tmp/broadcom-next.json ]; then
-            cat /tmp/broadcom-next.json
-            echo
-          fi
+          for i in $(seq 1 10); do
+            echo "===== Broadcom batch ${i}/10 ====="
 
-          if [ "$CURL_EXIT" -eq 28 ]; then
-            echo "::warning::Broadcom next batch timed out. The next scheduled worker will continue."
-            exit 0
-          fi
+            HTTP_CODE="$(curl --silent --show-error \
+              --max-time 260 \
+              --output /tmp/broadcom-next.json \
+              --write-out "%{http_code}" \
+              "${BASE_URL}/api/broadcom?action=next&token=${REINDEX_TOKEN}")"
+            CURL_EXIT=$?
 
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::warning::Broadcom next batch curl failed with exit code ${CURL_EXIT}."
-            exit 0
-          fi
+            if [ -f /tmp/broadcom-next.json ]; then
+              cat /tmp/broadcom-next.json
+              echo
+            fi
 
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            echo "::warning::Broadcom next batch returned HTTP ${HTTP_CODE}."
-            exit 0
-          fi
+            if [ "$CURL_EXIT" -eq 28 ]; then
+              echo "::warning::Broadcom batch ${i} timed out. Stop this worker run and continue on the next schedule."
+              break
+            fi
+
+            if [ "$CURL_EXIT" -ne 0 ]; then
+              echo "::warning::Broadcom batch ${i} curl failed with exit code ${CURL_EXIT}. Stop this worker run."
+              break
+            fi
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+              echo "::warning::Broadcom batch ${i} returned HTTP ${HTTP_CODE}. Stop this worker run."
+              break
+            fi
+
+            PHASE="$(jq -r '.phase // empty' /tmp/broadcom-next.json 2>/dev/null || true)"
+            STATUS="$(jq -r '.state.status // empty' /tmp/broadcom-next.json 2>/dev/null || true)"
+            SKIPPED="$(jq -r '.skipped // false' /tmp/broadcom-next.json 2>/dev/null || true)"
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "Broadcom current phase completed."
+            fi
+
+            if [ "$SKIPPED" = "true" ]; then
+              echo "No active Broadcom batch remains."
+              break
+            fi
+
+            # Tiny pause between Vercel invocations.
+            sleep 1
+          done
