@@ -1,23 +1,22 @@
-name: Notion Reindex Worker
+name: Daily Search Index Refresh
 
 on:
   schedule:
-    # GitHub Actions scheduled workflows use UTC.
-    # Every 5 minutes. GitHub may delay scheduled jobs during busy periods.
-    - cron: "2-57/5 * * * *"
+    # Every day at 03:17 UTC = 12:17 KST.
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: notion-reindex-worker
+  group: daily-search-index-refresh
   cancel-in-progress: false
 
 jobs:
-  process-next-batch:
+  daily-refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     env:
       BASE_URL: https://jandi-notion-search.vercel.app
@@ -32,130 +31,67 @@ jobs:
             exit 1
           fi
 
-      - name: Check reindex status
-        id: status
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STATUS_JSON="$(curl --fail --silent --show-error \
-            --max-time 30 \
-            "${BASE_URL}/api/reindex/status?token=${REINDEX_TOKEN}")"
-
-          echo "$STATUS_JSON"
-
-          STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
-          EXISTS="$(echo "$STATUS_JSON" | jq -r '.exists // false')"
-          PROGRESS="$(echo "$STATUS_JSON" | jq -r '.progress // 0')"
-          PROCESSED="$(echo "$STATUS_JSON" | jq -r '.processedPages // 0')"
-          TOTAL="$(echo "$STATUS_JSON" | jq -r '.totalPages // 0')"
-
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
-
-          echo "Current state: status=${STATUS:-none}, progress=${PROGRESS}%, processed=${PROCESSED}/${TOTAL}"
-
-      - name: Process next batch
-        if: steps.status.outputs.exists == 'true' && steps.status.outputs.status == 'running'
+      - name: Refresh Notion
         shell: bash
         run: |
           set -uo pipefail
 
-          echo "Reindex is running. Processing next batch..."
+          STATUS="$(curl --silent --show-error --max-time 30             "${BASE_URL}/api/reindex/status?token=${REINDEX_TOKEN}")"
+          echo "$STATUS"
 
-          HTTP_CODE="$(curl --silent --show-error \
-            --max-time 260 \
-            --output /tmp/notion-next.json \
-            --write-out "%{http_code}" \
-            "${BASE_URL}/api/reindex/next?token=${REINDEX_TOKEN}")"
-          CURL_EXIT=$?
+          NOTION_STATUS="$(echo "$STATUS" | jq -r '.status // "none"')"
 
-          if [ -f /tmp/notion-next.json ]; then
-            cat /tmp/notion-next.json
+          if [ "$NOTION_STATUS" != "running" ] && [ "$NOTION_STATUS" != "paused" ]; then
+            curl --silent --show-error --max-time 120               "${BASE_URL}/api/reindex/start?token=${REINDEX_TOKEN}" || true
+          fi
+
+          for i in $(seq 1 20); do
+            STATUS="$(curl --silent --show-error --max-time 30               "${BASE_URL}/api/reindex/status?token=${REINDEX_TOKEN}")"
+            NOTION_STATUS="$(echo "$STATUS" | jq -r '.status // "none"')"
+
+            if [ "$NOTION_STATUS" != "running" ]; then
+              break
+            fi
+
+            echo "Notion batch ${i}/20"
+
+            curl --silent --show-error --max-time 260               "${BASE_URL}/api/reindex/next?token=${REINDEX_TOKEN}" || break
             echo
-          fi
+          done
 
-          if [ "$CURL_EXIT" -eq 28 ]; then
-            echo "::warning::Notion next batch timed out. The next scheduled worker will retry."
-            exit 0
-          fi
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::warning::Notion next batch curl failed with exit code ${CURL_EXIT}."
-            exit 0
-          fi
-
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            echo "::warning::Notion next batch returned HTTP ${HTTP_CODE}."
-            exit 0
-          fi
-
-      - name: Check Broadcom reindex status
-        id: broadcom_status
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          STATUS_JSON="$(curl --fail --silent --show-error --max-time 30 \
-            "${BASE_URL}/api/broadcom?action=status&token=${REINDEX_TOKEN}")"
-
-          echo "$STATUS_JSON"
-
-          PHASE="$(echo "$STATUS_JSON" | jq -r '.phase // "idle"')"
-
-          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
-
-      - name: Process next Broadcom batch
-        if: steps.broadcom_status.outputs.phase == 'title' || steps.broadcom_status.outputs.phase == 'body'
+      - name: Broadcom daily incremental sync
         shell: bash
         run: |
           set -uo pipefail
 
-          echo "Broadcom rebuild active. Processing up to 10 batches..."
+          START="$(curl --silent --show-error --max-time 180             "${BASE_URL}/api/broadcom?action=daily_start&token=${REINDEX_TOKEN}")"
 
-          for i in $(seq 1 10); do
-            echo "===== Broadcom batch ${i}/10 ====="
+          echo "$START"
 
-            HTTP_CODE="$(curl --silent --show-error \
-              --max-time 260 \
-              --output /tmp/broadcom-next.json \
-              --write-out "%{http_code}" \
-              "${BASE_URL}/api/broadcom?action=next&token=${REINDEX_TOKEN}")"
-            CURL_EXIT=$?
+          PHASE="$(echo "$START" | jq -r '.phase // "idle"')"
 
-            if [ -f /tmp/broadcom-next.json ]; then
-              cat /tmp/broadcom-next.json
-              echo
-            fi
+          if [ "$PHASE" = "daily" ]; then
+            for i in $(seq 1 20); do
+              echo "Broadcom daily batch ${i}/20"
 
-            if [ "$CURL_EXIT" -eq 28 ]; then
-              echo "::warning::Broadcom batch ${i} timed out. Stop this worker run and continue on the next schedule."
-              break
-            fi
+              RESULT="$(curl --silent --show-error --max-time 260                 "${BASE_URL}/api/broadcom?action=daily_next&token=${REINDEX_TOKEN}")"
+              CURL_EXIT=$?
 
-            if [ "$CURL_EXIT" -ne 0 ]; then
-              echo "::warning::Broadcom batch ${i} curl failed with exit code ${CURL_EXIT}. Stop this worker run."
-              break
-            fi
+              echo "$RESULT"
 
-            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-              echo "::warning::Broadcom batch ${i} returned HTTP ${HTTP_CODE}. Stop this worker run."
-              break
-            fi
+              if [ "$CURL_EXIT" -ne 0 ]; then
+                echo "::warning::Broadcom daily batch failed; next daily run will continue."
+                break
+              fi
 
-            PHASE="$(jq -r '.phase // empty' /tmp/broadcom-next.json 2>/dev/null || true)"
-            STATUS="$(jq -r '.state.status // empty' /tmp/broadcom-next.json 2>/dev/null || true)"
-            SKIPPED="$(jq -r '.skipped // false' /tmp/broadcom-next.json 2>/dev/null || true)"
+              DONE="$(echo "$RESULT" | jq -r '.completed // false')"
 
-            if [ "$STATUS" = "completed" ]; then
-              echo "Broadcom current phase completed."
-            fi
+              if [ "$DONE" = "true" ]; then
+                break
+              fi
 
-            if [ "$SKIPPED" = "true" ]; then
-              echo "No active Broadcom batch remains."
-              break
-            fi
-
-            # Tiny pause between Vercel invocations.
-            sleep 1
-          done
+              sleep 1
+            done
+          else
+            echo "No Broadcom daily work is needed or initial full build is not complete."
+          fi
