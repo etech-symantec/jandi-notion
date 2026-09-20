@@ -4,7 +4,7 @@ on:
   schedule:
     # GitHub Actions scheduled workflows use UTC.
     # Every 5 minutes. GitHub may delay scheduled jobs during busy periods.
-    - cron: "*/5 * * * *"
+    - cron: "2-57/5 * * * *"
   workflow_dispatch:
 
 permissions:
