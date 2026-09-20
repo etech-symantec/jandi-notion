@@ -2,7 +2,10 @@ import {
   startFreshTitleRebuild,
   processNextTitleBatch,
   readTitleState,
-  readFinalTitleIndex
+  readFinalTitleIndex,
+  startDailyIncremental,
+  processNextDailyIncremental,
+  readDailyState
 } from "../lib/broadcom-title.js";
 
 import {
@@ -210,17 +213,53 @@ export default async function handler(req, res) {
       });
     }
 
+    if (action === "daily_start") {
+      const result =
+        await startDailyIncremental(
+          (stage, data = {}) =>
+            console.log(
+              `[BROADCOM-DAILY][${stage}]`,
+              JSON.stringify(data)
+            )
+        );
+
+      return res.status(200).json({
+        ok: true,
+        action: "daily_start",
+        ...result
+      });
+    }
+
+    if (action === "daily_next") {
+      const result =
+        await processNextDailyIncremental(
+          (stage, data = {}) =>
+            console.log(
+              `[BROADCOM-DAILY][${stage}]`,
+              JSON.stringify(data)
+            )
+        );
+
+      return res.status(200).json({
+        ok: true,
+        action: "daily_next",
+        ...result
+      });
+    }
+
     if (action === "status") {
       const [
         titleState,
         titleIndex,
         bodyState,
-        bodyManifest
+        bodyManifest,
+        dailyState
       ] = await Promise.all([
         readTitleState(),
         readFinalTitleIndex(),
         readBodyState(),
-        readBodyManifest()
+        readBodyManifest(),
+        readDailyState()
       ]);
 
       let phase = "idle";
@@ -263,6 +302,7 @@ export default async function handler(req, res) {
               null
           }
         },
+        daily: dailyState || null,
         body: {
           state: bodyState || null,
           index: {
@@ -286,7 +326,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       service:
-        "Broadcom Fresh Rebuild v4.10",
+        "Broadcom Local Bootstrap + Daily Incremental v4.11",
       usage: {
         reset:
           "/api/broadcom?action=reset&token=REINDEX_TOKEN",
