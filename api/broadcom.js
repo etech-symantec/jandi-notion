@@ -1,9 +1,15 @@
 import {
+  startFreshTitleRebuild,
+  processNextTitleBatch,
+  readTitleState,
+  readFinalTitleIndex
+} from "../lib/broadcom-title.js";
+
+import {
   startBodyIndex,
   processNextBodyBatch,
   readBodyState,
-  readBodyManifest,
-  readTitleIndex
+  readBodyManifest
 } from "../lib/broadcom-body.js";
 
 export default async function handler(req, res) {
@@ -14,7 +20,9 @@ export default async function handler(req, res) {
     });
   }
 
-  const token = String(req.query?.token || "");
+  const token = String(
+    req.query?.token || ""
+  );
 
   if (
     !process.env.REINDEX_TOKEN ||
@@ -31,81 +39,249 @@ export default async function handler(req, res) {
   ).toLowerCase();
 
   try {
-    if (action === "start") {
-      const force = ["1", "true"].includes(
-        String(req.query?.force || "").toLowerCase()
-      );
+    if (action === "reset") {
+      const started = Date.now();
 
-      const result = await startBodyIndex(force);
+      const result =
+        await startFreshTitleRebuild(
+          true,
+          (stage, data = {}) =>
+            console.log(
+              `[BROADCOM-RESET][+${Date.now() - started}ms][${stage}]`,
+              JSON.stringify(data)
+            )
+        );
+
+      return res.status(200).json({
+        ok: true,
+        action: "reset",
+        message:
+          "Fresh English title rebuild started. Body rebuild will start automatically after title completion.",
+        ...result
+      });
+    }
+
+    if (action === "title_next") {
+      const result =
+        await processNextTitleBatch(
+          (stage, data = {}) =>
+            console.log(
+              `[BROADCOM-TITLE][${stage}]`,
+              JSON.stringify(data)
+            )
+        );
+
+      if (
+        result?.state?.status ===
+        "completed"
+      ) {
+        const bodyState =
+          await readBodyState();
+
+        if (
+          !bodyState ||
+          bodyState.status !== "running"
+        ) {
+          await startBodyIndex(
+            true
+          );
+        }
+      }
+
+      return res.status(200).json({
+        ok: true,
+        action: "title_next",
+        ...result
+      });
+    }
+
+    if (action === "body_next") {
+      const result =
+        await processNextBodyBatch(
+          (stage, data = {}) =>
+            console.log(
+              `[BROADCOM-BODY][${stage}]`,
+              JSON.stringify(data)
+            )
+        );
+
+      return res.status(200).json({
+        ok: true,
+        action: "body_next",
+        ...result
+      });
+    }
+
+    if (action === "start") {
+      const titleState =
+        await readTitleState();
+
+      if (
+        !titleState ||
+        titleState.status !== "completed"
+      ) {
+        const result =
+          await startFreshTitleRebuild(
+            false
+          );
+
+        return res.status(
+          result.alreadyRunning ? 409 : 200
+        ).json({
+          ok:
+            !result.alreadyRunning,
+          action: "start_title",
+          ...result
+        });
+      }
+
+      const result =
+        await startBodyIndex(
+          false
+        );
 
       return res.status(
         result.alreadyRunning ? 409 : 200
       ).json({
-        ok: !result.alreadyRunning,
-        action: "start",
+        ok:
+          !result.alreadyRunning,
+        action: "start_body",
         ...result
       });
     }
 
     if (action === "next") {
-      const started = Date.now();
+      const titleState =
+        await readTitleState();
 
-      const result = await processNextBodyBatch(
-        (stage, data = {}) =>
-          console.log(
-            `[BROADCOM-BODY][+${Date.now() - started}ms][${stage}]`,
-            JSON.stringify(data)
-          )
-      );
+      if (
+        titleState?.status ===
+        "running"
+      ) {
+        const result =
+          await processNextTitleBatch();
+
+        if (
+          result?.state?.status ===
+          "completed"
+        ) {
+          await startBodyIndex(
+            true
+          );
+        }
+
+        return res.status(200).json({
+          ok: true,
+          phase: "title",
+          ...result
+        });
+      }
+
+      const bodyState =
+        await readBodyState();
+
+      if (
+        bodyState?.status ===
+        "running"
+      ) {
+        const result =
+          await processNextBodyBatch();
+
+        return res.status(200).json({
+          ok: true,
+          phase: "body",
+          ...result
+        });
+      }
 
       return res.status(200).json({
         ok: true,
-        action: "next",
-        ...result,
-        durationMs: Date.now() - started
+        skipped: true,
+        reason:
+          "No active Broadcom rebuild."
       });
     }
 
     if (action === "status") {
-      const state = await readBodyState();
-      const manifest = await readBodyManifest();
-      const titleIndex = await readTitleIndex();
+      const [
+        titleState,
+        titleIndex,
+        bodyState,
+        bodyManifest
+      ] = await Promise.all([
+        readTitleState(),
+        readFinalTitleIndex(),
+        readBodyState(),
+        readBodyManifest()
+      ]);
+
+      let phase = "idle";
+
+      if (
+        titleState?.status ===
+        "running"
+      ) {
+        phase = "title";
+      } else if (
+        bodyState?.status ===
+        "running"
+      ) {
+        phase = "body";
+      } else if (
+        titleState?.status ===
+          "completed" &&
+        bodyState?.status ===
+          "completed"
+      ) {
+        phase = "completed";
+      }
 
       return res.status(200).json({
         ok: true,
-        exists: !!state,
-        titleIndex: {
-          exists: !!titleIndex,
-          pageCount:
-            titleIndex?.pageCount ||
-            titleIndex?.records?.length ||
-            0,
-          createdAt:
-            titleIndex?.createdAt || null
+        phase,
+        title: {
+          state: titleState || null,
+          finalIndex: {
+            exists: !!titleIndex,
+            pageCount:
+              titleIndex?.pageCount ||
+              titleIndex?.records?.length ||
+              0,
+            createdAt:
+              titleIndex?.createdAt ||
+              null,
+            language:
+              titleIndex?.language ||
+              null
+          }
         },
-        bodyIndex: {
-          exists: !!manifest,
-          indexedPages:
-            manifest?.indexedPages || 0,
-          chunkCount:
-            Object.keys(
-              manifest?.chunks || {}
-            ).length,
-          updatedAt:
-            manifest?.updatedAt || null
-        },
-        ...(state || {})
+        body: {
+          state: bodyState || null,
+          index: {
+            exists: !!bodyManifest,
+            indexedPages:
+              bodyManifest?.indexedPages ||
+              0,
+            chunkCount:
+              Object.keys(
+                bodyManifest?.chunks ||
+                {}
+              ).length,
+            updatedAt:
+              bodyManifest?.updatedAt ||
+              null
+          }
+        }
       });
     }
 
     return res.status(200).json({
       ok: true,
-      service: "Broadcom Chunked Body Index v4.6",
-      titleIndex:
-        "Existing broadcom-index.json is preserved.",
+      service:
+        "Broadcom Fresh Rebuild v4.7",
       usage: {
-        start:
-          "/api/broadcom?action=start&token=REINDEX_TOKEN",
+        reset:
+          "/api/broadcom?action=reset&token=REINDEX_TOKEN",
         next:
           "/api/broadcom?action=next&token=REINDEX_TOKEN",
         status:
@@ -116,7 +292,8 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error:
-        error?.message || String(error)
+        error?.message ||
+        String(error)
     });
   }
 }

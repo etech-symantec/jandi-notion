@@ -1,99 +1,83 @@
-# JANDI → Notion + Broadcom KB 검색 v4.6
-## 180,000+ Broadcom KB 대응 구조
+# JANDI → Notion + Broadcom KB 검색 v4.7
+## Broadcom 완전 초기화 + 새 영어 인덱스 재구축
 
-Broadcom 제목 인덱스와 본문 인덱스를 분리했습니다.
+v4.7에서는 기존 Broadcom 제목 인덱스 180,477개도 재사용하지 않고
+sitemap부터 새로 읽어서 영어 KB 제목 인덱스를 다시 만듭니다.
 
-### 제목 인덱스
-기존:
-`jandi-notion/broadcom-index.json`
+## 완전 초기화 시작
 
-을 그대로 사용합니다.
+배포 후 한 번 호출:
 
-현재 약 180,477개 제목이 들어 있어도 v4.6에서 절대
-10,000개짜리 본문 인덱스로 덮어쓰지 않습니다.
+`/api/broadcom?action=reset&token=REINDEX_TOKEN`
 
-따라서 Broadcom 본문 구축이 오래 걸려도 제목 검색은 처음부터
-기존 전체 KB를 계속 검색합니다.
+이 작업은:
 
-### 본문 인덱스
+1. Broadcom sitemap을 새로 읽음
+2. `external/article/` URL 전체 목록을 새 plan으로 생성
+3. 영어 제목만 새 title chunk에 저장
+4. title rebuild 완료 후 새 `broadcom-index.json` 생성
+5. 그 직후 새 제목 인덱스를 기준으로 body chunk rebuild 자동 시작
+6. body도 영어 문서만 저장
 
-본문은 별도 gzip chunk로 저장됩니다.
+## 진행
 
-경로:
-`jandi-notion/broadcom-body/chunks/chunk-xxxxx.json.gz`
-
-기본:
-- chunk당 250개 문서
-- 문서당 본문 최대 4,000자
-- gzip 압축
-- 영어 문서만 저장
-
-각 chunk에는 별도 Bloom filter를 만들어 manifest에 저장합니다.
-
-검색 시 전체 본문 chunk를 읽지 않고 검색어가 존재할 가능성이 있는
-chunk만 골라서 읽습니다.
-
-manifest:
-`jandi-notion/broadcom-body/manifest.json`
-
-## 최초 시작
-
-배포 후:
-
-`/api/broadcom?action=start&token=REINDEX_TOKEN&force=true`
-
-상태:
-
-`/api/broadcom?action=status&token=REINDEX_TOKEN`
-
-GitHub 5분 worker가 기존과 같이:
+GitHub 5분 worker는 기존과 동일하게:
 
 `/api/broadcom?action=next&token=REINDEX_TOKEN`
 
-를 호출하면서 진행합니다.
+를 호출합니다.
 
-## 상태 예
+`next`는 현재 phase를 보고 자동으로 처리합니다.
 
-- titleIndex.pageCount = 180477
-- bodyIndex.indexedPages = 현재까지 본문 저장 완료된 영어 KB 수
-- processedPages = 제목 인덱스에서 검사 완료한 위치
-- progress = 전체 본문 구축 진행률
+- phase=title → 제목 인덱스 다음 batch
+- title 완료 → body rebuild 자동 시작
+- phase=body → 본문 다음 batch
 
-본문 구축 중에도 제목 인덱스 180,477개는 계속 사용됩니다.
+## 상태
 
-## 검색
+`/api/broadcom?action=status&token=REINDEX_TOKEN`
 
-검색 순서:
-1. Notion 제목+본문
-2. Broadcom 제목 전체 인덱스
-3. Broadcom 본문 Bloom filter로 후보 chunk 선택
-4. 후보 body chunk 검색
-5. URL 기준 중복 제거/결과 병합
+응답:
 
-잔디:
-- Notion 최대 5개
-- KB 최대 5개
+- `phase: title`
+- `phase: body`
+- `phase: completed`
 
-웹:
-- 전체 / Notion / KB 필터
-- Notion 흰색 태그
-- KB Broadcom 빨간 태그
-- 태그 클릭 필터
+### title.state
+- totalPages
+- processedPages
+- englishPages
+- skippedNonEnglish
+- failedPages
+- progress
 
-## 권장 기본값
+### title.finalIndex
+- pageCount
+- createdAt
+- language=en
 
-BROADCOM_BODY_MAX_PAGES=250000
-BROADCOM_BODY_FETCH_BATCH=50
-BROADCOM_BODY_CONCURRENCY=5
-BROADCOM_BODY_CHUNK_SIZE=250
-BROADCOM_BODY_MAX_CHARS=4000
-BROADCOM_BODY_REFRESH_AGE_DAYS=30
-BROADCOM_BODY_SEARCH_MAX_CHUNKS=40
+### body.state
+- processedPages
+- bodyIndexedPages
+- skippedNonEnglish
+- failedPages
+- progress
+
+## 영어 제목 판정
+
+다음 문자가 제목 또는 URL slug에 있으면 제외:
+
+- 일본어 Hiragana/Katakana
+- CJK 한자
+- 한글
+- Cyrillic
+
+`%E3%82...` 같은 깨진 percent-encoded 제목도 제외합니다.
 
 ## 주의
 
-18만 개 페이지의 최초 본문 수집은 무료 Vercel에서는 상당한 시간이 걸립니다.
-하지만 v4.6에서는 그동안에도 기존 18만 개 제목 검색이 정상 동작하고,
-수집 완료된 본문 chunk는 즉시 검색에 반영됩니다.
+기존 final title index는 새 title rebuild가 완료될 때까지 검색에서 남아 있을 수 있습니다.
+새 title rebuild가 완료되는 순간 새 영어 전용 `broadcom-index.json`으로 교체됩니다.
 
-기존 `broadcom-index.json`은 삭제하지 마세요.
+완전히 즉시 검색에서도 기존 KB를 없애고 싶다면 별도 delete API가 필요하지만,
+운영 중 검색 공백을 피하기 위해 v4.7은 "새 인덱스 완성 후 교체" 방식을 사용합니다.
