@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      service: "JANDI Notion Search v4.4",
+      service: "JANDI Notion Search v4.5",
       endpoint: "/api/notion",
       searchPage: "/search",
       syntax: { and: "&", or: "|", precedence: "& before |" }

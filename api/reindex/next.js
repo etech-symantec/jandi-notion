@@ -56,8 +56,21 @@ export default async function handler(req, res) {
     }
 
     const startIndex = state.nextIndex;
+
+    // Safety cap for existing runs:
+    // state.batchSize may be 15 from an older run, but a single request
+    // should stay comfortably below Vercel Hobby's 300s function limit.
+    const configuredBatchSize = Number(state.batchSize || 15);
+    const runtimeBatchSize = Math.max(
+      1,
+      Math.min(
+        configuredBatchSize,
+        Number(process.env.REINDEX_RUNTIME_BATCH_SIZE || 5)
+      )
+    );
+
     const endIndex = Math.min(
-      startIndex + state.batchSize,
+      startIndex + runtimeBatchSize,
       state.totalPages
     );
 
@@ -67,6 +80,8 @@ export default async function handler(req, res) {
       startIndex,
       endIndex,
       batchPages: batch.length,
+      runtimeBatchSize,
+      configuredBatchSize,
       totalPages: state.totalPages
     });
 
