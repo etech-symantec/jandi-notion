@@ -101,14 +101,12 @@ jobs:
 
           echo "$STATUS_JSON"
 
-          STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
-          EXISTS="$(echo "$STATUS_JSON" | jq -r '.exists // false')"
+          PHASE="$(echo "$STATUS_JSON" | jq -r '.phase // "idle"')"
 
-          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
-          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
 
       - name: Process next Broadcom batch
-        if: steps.broadcom_status.outputs.exists == 'true' && steps.broadcom_status.outputs.status == 'running'
+        if: steps.broadcom_status.outputs.phase == 'title' || steps.broadcom_status.outputs.phase == 'body'
         shell: bash
         run: |
           set -euo pipefail
