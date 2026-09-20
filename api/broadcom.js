@@ -9,7 +9,8 @@ import {
   startBodyIndex,
   processNextBodyBatch,
   readBodyState,
-  readBodyManifest
+  readBodyManifest,
+  resetBodyIndexStorage
 } from "../lib/broadcom-body.js";
 
 export default async function handler(req, res) {
@@ -42,6 +43,12 @@ export default async function handler(req, res) {
     if (action === "reset") {
       const started = Date.now();
 
+      // True full reset: clear the active body state and manifest first.
+      // Old orphaned physical chunk blobs are no longer referenced and
+      // therefore cannot affect search or the new rebuild.
+      const bodyReset =
+        await resetBodyIndexStorage();
+
       const result =
         await startFreshTitleRebuild(
           true,
@@ -56,7 +63,8 @@ export default async function handler(req, res) {
         ok: true,
         action: "reset",
         message:
-          "Fresh English title rebuild started. Body rebuild will start automatically after title completion.",
+          "True full reset completed. Fresh English title rebuild started; body index is empty and waiting for title completion.",
+        bodyReset,
         ...result
       });
     }
@@ -278,7 +286,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       service:
-        "Broadcom Fresh Rebuild v4.7",
+        "Broadcom Fresh Rebuild v4.8",
       usage: {
         reset:
           "/api/broadcom?action=reset&token=REINDEX_TOKEN",

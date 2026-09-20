@@ -1,83 +1,53 @@
-# JANDI → Notion + Broadcom KB 검색 v4.7
-## Broadcom 완전 초기화 + 새 영어 인덱스 재구축
+# JANDI → Notion + Broadcom KB 검색 v4.8
+## 진짜 완전 초기화
 
-v4.7에서는 기존 Broadcom 제목 인덱스 180,477개도 재사용하지 않고
-sitemap부터 새로 읽어서 영어 KB 제목 인덱스를 다시 만듭니다.
+v4.7 상태 출력에서 과거 body state가 `running`으로 남는 문제가 확인되어
+reset 동작을 강화했습니다.
 
-## 완전 초기화 시작
-
-배포 후 한 번 호출:
+## v4.8 reset 동작
 
 `/api/broadcom?action=reset&token=REINDEX_TOKEN`
 
-이 작업은:
+호출 즉시:
 
-1. Broadcom sitemap을 새로 읽음
-2. `external/article/` URL 전체 목록을 새 plan으로 생성
-3. 영어 제목만 새 title chunk에 저장
-4. title rebuild 완료 후 새 `broadcom-index.json` 생성
-5. 그 직후 새 제목 인덱스를 기준으로 body chunk rebuild 자동 시작
-6. body도 영어 문서만 저장
+1. 기존 body manifest를 빈 manifest로 덮어씀
+2. body state를 `waiting_for_title`로 초기화
+3. 기존 body chunk는 manifest에서 참조하지 않으므로 검색/재사용되지 않음
+4. Broadcom sitemap을 다시 읽어 새 title plan 생성
+5. 영어 제목 인덱스를 처음부터 재구축
+6. 제목 완료 후 body manifest를 다시 빈 상태로 시작
+7. 새 영어 제목 인덱스를 기준으로 본문을 처음부터 구축
 
-## 진행
+따라서 이전 v4.6/v4.7 body 상태나 chunk는 새 검색 결과에 섞이지 않습니다.
 
-GitHub 5분 worker는 기존과 동일하게:
+## reset 직후 정상 상태 예
 
-`/api/broadcom?action=next&token=REINDEX_TOKEN`
+phase: title
 
-를 호출합니다.
+title.state:
+- status: running
+- processedPages: 0
 
-`next`는 현재 phase를 보고 자동으로 처리합니다.
+body.state:
+- status: waiting_for_title
+- processedPages: 0
+- bodyIndexedPages: 0
 
-- phase=title → 제목 인덱스 다음 batch
-- title 완료 → body rebuild 자동 시작
-- phase=body → 본문 다음 batch
+body.index:
+- indexedPages: 0
+- chunkCount: 0
 
-## 상태
+## 제목 작업 진행
 
-`/api/broadcom?action=status&token=REINDEX_TOKEN`
+GitHub 5분 worker가 `/api/broadcom?action=next...`를 호출하면:
 
-응답:
+- phase=title → 제목 100개 기본 처리
+- title 완료 → 새 영어 final title index 생성
+- body state 자동으로 새로 시작
+- phase=body → 본문 chunk 생성
 
-- `phase: title`
-- `phase: body`
-- `phase: completed`
+## 참고
 
-### title.state
-- totalPages
-- processedPages
-- englishPages
-- skippedNonEnglish
-- failedPages
-- progress
-
-### title.finalIndex
-- pageCount
-- createdAt
-- language=en
-
-### body.state
-- processedPages
-- bodyIndexedPages
-- skippedNonEnglish
-- failedPages
-- progress
-
-## 영어 제목 판정
-
-다음 문자가 제목 또는 URL slug에 있으면 제외:
-
-- 일본어 Hiragana/Katakana
-- CJK 한자
-- 한글
-- Cyrillic
-
-`%E3%82...` 같은 깨진 percent-encoded 제목도 제외합니다.
-
-## 주의
-
-기존 final title index는 새 title rebuild가 완료될 때까지 검색에서 남아 있을 수 있습니다.
-새 title rebuild가 완료되는 순간 새 영어 전용 `broadcom-index.json`으로 교체됩니다.
-
-완전히 즉시 검색에서도 기존 KB를 없애고 싶다면 별도 delete API가 필요하지만,
-운영 중 검색 공백을 피하기 위해 v4.7은 "새 인덱스 완성 후 교체" 방식을 사용합니다.
+Blob의 과거 physical chunk 파일 자체를 삭제하는 API는 사용하지 않습니다.
+대신 새 manifest에서 과거 chunk를 완전히 참조 해제하므로 기능상 완전 초기화됩니다.
+이 방식이 Vercel Hobby 환경에서 더 안전하고 빠릅니다.
